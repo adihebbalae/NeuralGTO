@@ -22,6 +22,7 @@ venv/
 
 # Internal notes / brainstorm / AI output — not for public repo
 _notes/
+_priv/
 
 # PokerGPT work files
 poker_gpt/_work/

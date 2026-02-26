@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.github/
 
 # Python
 __pycache__/
@@ -19,6 +20,7 @@ venv/
 .idea/
 *.swp
 *.swo
+.github/
 
 # Internal notes / brainstorm / AI output — not for public repo
 _notes/

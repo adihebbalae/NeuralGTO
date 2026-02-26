@@ -4,3 +4,4 @@
 google-genai>=1.0.0  # Google Gemini API client
 python-dotenv>=1.0.0 # Load .env configuration files
 streamlit>=1.30.0    # Web UI
+rich>=13.0.0         # CLI output formatting (tables, colors)

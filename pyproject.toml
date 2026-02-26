@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that require live API keys or external services (deselect with '-m \"not integration\"')",
+]

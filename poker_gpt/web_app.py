@@ -239,6 +239,21 @@ if mode:
         source_label = result.get("source", "unknown")
         if result.get("cached"):
             source_label += " (cached)"
+        # Confidence badge
+        confidence = result.get("confidence", "low")
+        conf_colors = {
+            "high": "green", "medium": "orange", "low": "red",
+        }
+        conf_labels = {
+            "high": "High \u2014 solver-verified",
+            "medium": "Medium \u2014 pre-solved GTO lookup",
+            "low": "Low \u2014 LLM approximation",
+        }
+        conf_color = conf_colors.get(confidence, "gray")
+        conf_text = conf_labels.get(confidence, confidence)
+        st.markdown(
+            f"**Confidence:** :{conf_color}[{conf_text}]"
+        )
         st.caption(
             f"Mode: {mode_labels[mode]} · "
             f"Time: {elapsed:.1f}s · "

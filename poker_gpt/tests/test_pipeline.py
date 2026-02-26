@@ -21,6 +21,8 @@ import sys
 import os
 from pathlib import Path
 
+import pytest
+
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -33,6 +35,7 @@ from poker_gpt.range_utils import (
 )
 from poker_gpt.solver_input import generate_solver_input
 from poker_gpt.strategy_extractor import extract_strategy
+from poker_gpt.validation import validate_scenario
 from poker_gpt import config
 
 
@@ -218,45 +221,122 @@ def test_full_pipeline_no_api():
     print("=" * 50)
 
 
+@pytest.mark.integration
 def test_full_pipeline_with_api():
     """Test the full pipeline including API calls (requires GEMINI_API_KEY)."""
     if not config.GEMINI_API_KEY or config.GEMINI_API_KEY == "your-gemini-api-key-here":
-        print("⚠ Skipping API tests: GEMINI_API_KEY not set")
-        return
-    
-    print("\n" + "=" * 50)
-    print("Running API pipeline tests...")
-    print("=" * 50 + "\n")
-    
+        pytest.skip("GEMINI_API_KEY not set")
+
     from poker_gpt.nl_parser import parse_scenario
     from poker_gpt.nl_advisor import generate_fallback_advice
-    
+
     # Test NL parsing
-    print("Testing NL parser (Step 1)...")
     test_input = (
         "I have pocket queens on the button. UTG raises to 3bb, "
         "I 3bet to 9bb, everyone folds and UTG calls. "
         "Flop is Ten of spades, Nine of diamonds, Four of hearts. "
         "UTG checks to me. What should I do?"
     )
-    
+
     scenario = parse_scenario(test_input)
-    print(f"  ✓ Parsed: {scenario.hero_hand} ({scenario.hero_position})")
-    print(f"  Board: {scenario.board}")
-    print(f"  Pot: {scenario.pot_size_bb}bb, Stack: {scenario.effective_stack_bb}bb")
-    print(f"  IP: {scenario.hero_is_ip}")
-    print(f"  OOP range (first 80 chars): {scenario.oop_range[:80]}")
-    print(f"  IP range (first 80 chars): {scenario.ip_range[:80]}")
-    
+    assert scenario.hero_hand, "Parser should extract hero hand"
+    assert scenario.hero_position, "Parser should extract hero position"
+
     # Test fallback advisor
-    print("\nTesting fallback advisor (Step 5)...")
     advice = generate_fallback_advice(test_input, scenario)
-    print(f"  ✓ Generated {len(advice)} chars of advice")
-    print(f"  Preview: {advice[:200]}...")
-    
-    print("\n" + "=" * 50)
-    print("✓ All API tests passed!")
-    print("=" * 50)
+    assert len(advice) > 0, "Advisor should generate non-empty advice"
+
+
+# ──────────────────────────────────────────────
+# Validation Tests (T1.1)
+# ──────────────────────────────────────────────
+
+def _make_valid_scenario(**overrides) -> ScenarioData:
+    """Helper to create a valid ScenarioData with optional overrides."""
+    defaults = dict(
+        hero_hand="QhQd",
+        hero_position="BTN",
+        board="Ts,9d,4h",
+        pot_size_bb=36.0,
+        effective_stack_bb=88.0,
+        current_street="flop",
+        oop_range="AA,KK,QQ,JJ",
+        ip_range="TT,99,88,77",
+        hero_is_ip=True,
+    )
+    defaults.update(overrides)
+    return ScenarioData(**defaults)
+
+
+def test_validate_scenario_valid():
+    """A valid scenario should pass validation with no errors."""
+    scenario = _make_valid_scenario()
+    errors = validate_scenario(scenario)
+    assert errors == [], f"Expected no errors, got: {errors}"
+
+
+def test_validate_scenario_missing_hand():
+    """Missing hero_hand should produce a validation error."""
+    scenario = _make_valid_scenario(hero_hand="")
+    errors = validate_scenario(scenario)
+    assert len(errors) >= 1
+    assert any("hero hand" in e.lower() or "hole cards" in e.lower() for e in errors)
+
+
+def test_validate_scenario_invalid_hand():
+    """An invalid hero_hand (wrong length) should produce a validation error."""
+    scenario = _make_valid_scenario(hero_hand="QQ")
+    errors = validate_scenario(scenario)
+    assert len(errors) >= 1
+    assert any("invalid" in e.lower() or "expected" in e.lower() for e in errors)
+
+
+def test_validate_scenario_invalid_position():
+    """An unknown position should produce a validation error."""
+    scenario = _make_valid_scenario(hero_position="UNKNOWN")
+    errors = validate_scenario(scenario)
+    assert len(errors) >= 1
+    assert any("position" in e.lower() for e in errors)
+
+
+def test_validate_scenario_negative_pot():
+    """Negative pot_size_bb should produce a validation error."""
+    scenario = _make_valid_scenario(pot_size_bb=-5.0)
+    errors = validate_scenario(scenario)
+    assert len(errors) >= 1
+    assert any("pot" in e.lower() for e in errors)
+
+
+def test_validate_scenario_negative_stack():
+    """Negative effective_stack_bb should produce a validation error."""
+    scenario = _make_valid_scenario(effective_stack_bb=-10.0)
+    errors = validate_scenario(scenario)
+    assert len(errors) >= 1
+    assert any("stack" in e.lower() for e in errors)
+
+
+def test_validate_scenario_empty_range():
+    """Empty OOP range should produce a validation error."""
+    scenario = _make_valid_scenario(oop_range="")
+    errors = validate_scenario(scenario)
+    assert len(errors) >= 1
+    assert any("range" in e.lower() for e in errors)
+
+
+def test_validate_scenario_invalid_board_card():
+    """An invalid board card should produce a validation error."""
+    scenario = _make_valid_scenario(board="Xx,9d,4h")
+    errors = validate_scenario(scenario)
+    assert len(errors) >= 1
+    assert any("board" in e.lower() or "card" in e.lower() for e in errors)
+
+
+def test_validate_scenario_wrong_board_count():
+    """Wrong number of board cards for the street should produce a validation error."""
+    scenario = _make_valid_scenario(board="Ts,9d", current_street="flop")
+    errors = validate_scenario(scenario)
+    assert len(errors) >= 1
+    assert any("board" in e.lower() or "card" in e.lower() for e in errors)
 
 
 if __name__ == "__main__":

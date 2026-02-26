@@ -132,3 +132,57 @@ def validate_config():
 def ensure_work_dir():
     """Create the working directory if it doesn't exist."""
     WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def check_env() -> bool:
+    """
+    Validate environment setup and print a clear status checklist.
+
+    Checks GEMINI_API_KEY, SOLVER_BINARY_PATH, and SOLVER_RESOURCES_PATH.
+    Prints a formatted checklist to stdout.
+
+    Returns:
+        True if the minimum required config (GEMINI_API_KEY) is present.
+        False if the pipeline cannot function.
+    """
+    import sys
+
+    issues_found = False
+    lines: list[str] = []
+
+    # --- GEMINI_API_KEY ---
+    if GEMINI_API_KEY and GEMINI_API_KEY != "your-gemini-api-key-here":
+        lines.append("  ✓ GEMINI_API_KEY: set")
+    else:
+        lines.append("  ✗ GEMINI_API_KEY: not set")
+        lines.append("    → Create a .env file with: GEMINI_API_KEY=your-key-here")
+        lines.append("    → Get a key at https://aistudio.google.com/apikey")
+        issues_found = True
+
+    # --- SOLVER_BINARY_PATH ---
+    solver_path = Path(SOLVER_BINARY_PATH)
+    if solver_path.exists():
+        lines.append(f"  ✓ SOLVER_BINARY_PATH: found")
+    else:
+        lines.append(f"  ✗ SOLVER_BINARY_PATH: not found at {SOLVER_BINARY_PATH}")
+        lines.append("    → Download from https://github.com/bupticybee/TexasSolver/releases")
+        lines.append("    → Solver is optional — pipeline falls back to LLM-only mode")
+
+    # --- SOLVER_RESOURCES_PATH ---
+    resources_path = Path(SOLVER_RESOURCES_PATH)
+    if resources_path.exists():
+        lines.append(f"  ✓ SOLVER_RESOURCES_PATH: found")
+    else:
+        lines.append(f"  ✗ SOLVER_RESOURCES_PATH: not found at {SOLVER_RESOURCES_PATH}")
+        lines.append("    → Should be in the same directory as the solver binary")
+
+    # Only print if there are issues
+    if issues_found or not solver_path.exists() or not resources_path.exists():
+        print("\n⚠ NeuralGTO Setup Check:")
+        for line in lines:
+            print(line)
+        print()
+
+    if issues_found:
+        return False
+    return True

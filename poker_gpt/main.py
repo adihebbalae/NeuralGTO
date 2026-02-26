@@ -62,6 +62,26 @@ from poker_gpt.nl_advisor import generate_advice, generate_fallback_advice
 from poker_gpt.sanity_checker import check_strategy_sanity
 from poker_gpt.cache import compute_cache_key, cache_lookup, cache_store
 from poker_gpt.preflop_lookup import lookup_preflop_strategy, is_preflop_lookup_available
+from poker_gpt.validation import validate_scenario, format_validation_errors
+
+
+# ──────────────────────────────────────────────
+# Confidence mapping: source → confidence label
+# ──────────────────────────────────────────────
+_CONFIDENCE_MAP = {
+    "solver": "high",
+    "solver_cached": "high",
+    "preflop_lookup": "medium",
+    "llm_only": "low",
+    "llm_fallback": "low",
+    "gpt_fallback": "low",
+}
+
+_CONFIDENCE_LABELS = {
+    "high": "High \u2014 solver-verified",
+    "medium": "Medium \u2014 pre-solved GTO lookup",
+    "low": "Low \u2014 LLM approximation",
+}
 
 
 def analyze_hand(
@@ -110,6 +130,24 @@ def analyze_hand(
         f"Board: {scenario.board}"
     )
 
+    # ── Step 1.1: Validate parsed scenario ──
+    validation_errors = validate_scenario(scenario)
+    if validation_errors:
+        error_msg = format_validation_errors(validation_errors)
+        _status(f"  ⚠ Validation issues found ({len(validation_errors)})")
+        return {
+            "advice": error_msg,
+            "mode": mode,
+            "scenario": scenario,
+            "strategy": None,
+            "sanity_note": "",
+            "cached": False,
+            "solve_time": 0.0,
+            "source": "validation_error",
+            "confidence": "low",
+            "parse_time": parse_time,
+        }
+
     # ── Check if we should use the solver ──
     use_solver = preset.get("use_solver", True) and config.USE_SOLVER and is_solver_available()
 
@@ -140,6 +178,7 @@ def analyze_hand(
                 opponent_notes=opponent_notes,
             )
             _status(f"  \u2713 Generated in {time.time()-t_adv:.1f}s")
+            source = "preflop_lookup"
             return {
                 "advice": advice,
                 "mode": mode,
@@ -148,7 +187,9 @@ def analyze_hand(
                 "sanity_note": "",
                 "cached": True,  # Effectively cached — instant lookup
                 "solve_time": 0.0,
-                "source": "preflop_lookup",
+                "source": source,
+                "confidence": _CONFIDENCE_MAP.get(source, "low"),
+                "parse_time": parse_time,
             }
         else:
             _status("  No exact preflop match — falling back to LLM mode")
@@ -158,6 +199,7 @@ def analyze_hand(
         _status("Generating GTO-approximate advice via Gemini (LLM-only)...")
         t1 = time.time()
         advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
+        source = "llm_only"
         _status(f"  ✓ Generated in {time.time()-t1:.1f}s")
         return {
             "advice": advice,
@@ -167,7 +209,9 @@ def analyze_hand(
             "sanity_note": "",
             "cached": False,
             "solve_time": 0.0,
-            "source": "llm_only",
+            "source": source,
+            "confidence": _CONFIDENCE_MAP.get(source, "low"),
+            "parse_time": parse_time,
         }
 
     # ── Step 2: Generate solver input file (with mode-specific settings) ──
@@ -200,6 +244,7 @@ def analyze_hand(
             _status(f"  ✗ Solver failed: {e}")
             _status("  Falling back to LLM-only mode...")
             advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
+            source = "llm_fallback"
             return {
                 "advice": advice,
                 "mode": mode,
@@ -208,12 +253,15 @@ def analyze_hand(
                 "sanity_note": "",
                 "cached": False,
                 "solve_time": 0.0,
-                "source": "llm_fallback",
+                "source": source,
+                "confidence": _CONFIDENCE_MAP.get(source, "low"),
+                "parse_time": parse_time,
             }
 
         if output_file is None:
             _status("  Solver unavailable — falling back to LLM-only...")
             advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
+            source = "llm_fallback"
             return {
                 "advice": advice,
                 "mode": mode,
@@ -222,7 +270,9 @@ def analyze_hand(
                 "sanity_note": "",
                 "cached": False,
                 "solve_time": 0.0,
-                "source": "llm_fallback",
+                "source": source,
+                "confidence": _CONFIDENCE_MAP.get(source, "low"),
+                "parse_time": parse_time,
             }
 
         solve_time = time.time() - t2
@@ -245,6 +295,7 @@ def analyze_hand(
         _status(f"  ✗ Strategy extraction failed: {e}")
         _status("  Falling back to LLM-only mode...")
         advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
+        source = "llm_fallback"
         return {
             "advice": advice,
             "mode": mode,
@@ -253,7 +304,9 @@ def analyze_hand(
             "sanity_note": "",
             "cached": cached,
             "solve_time": solve_time,
-            "source": "llm_fallback",
+            "source": source,
+            "confidence": _CONFIDENCE_MAP.get(source, "low"),
+            "parse_time": parse_time,
         }
 
     # ── Step 4.5: Sanity check extreme frequencies ──
@@ -279,6 +332,7 @@ def analyze_hand(
     )
     _status(f"  ✓ Generated in {time.time()-t4:.1f}s")
 
+    source = "solver_cached" if cached else "solver"
     return {
         "advice": advice,
         "mode": mode,
@@ -287,7 +341,9 @@ def analyze_hand(
         "sanity_note": sanity_note,
         "cached": cached,
         "solve_time": solve_time,
-        "source": "solver_cached" if cached else "solver",
+        "source": source,
+        "confidence": _CONFIDENCE_MAP.get(source, "low"),
+        "parse_time": parse_time,
     }
 
 
@@ -299,7 +355,7 @@ def run_pipeline(
     user_input: str,
     mode: str = "default",
     opponent_notes: str = "",
-) -> str:
+) -> dict:
     """
     Run the full PokerGPT pipeline with CLI-friendly output.
     
@@ -309,15 +365,106 @@ def run_pipeline(
         opponent_notes: Optional villain tendency description.
         
     Returns:
-        Natural language advice string.
+        Full result dict from analyze_hand().
     """
+    try:
+        from rich.console import Console
+        console = Console()
+        def _status(msg: str):
+            console.print(msg)
+    except ImportError:
+        def _status(msg: str):
+            print(msg)
+
     result = analyze_hand(
         user_input,
         mode=mode,
-        on_status=lambda msg: print(msg),
+        on_status=_status,
         opponent_notes=opponent_notes,
     )
-    return result["advice"]
+    return result
+
+
+def _display_result(result: dict, opponent_notes: str = "") -> None:
+    """
+    Display analysis results with rich formatting (tables, colors).
+    Falls back to plain text if rich is unavailable.
+    """
+    strategy = result.get("strategy")
+    advice = result.get("advice", "No advice generated.")
+    confidence = result.get("confidence", "low")
+    confidence_label = _CONFIDENCE_LABELS.get(confidence, confidence)
+    source = result.get("source", "unknown")
+    parse_time = result.get("parse_time", 0.0)
+    solve_time = result.get("solve_time", 0.0)
+    cached = result.get("cached", False)
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        from rich.panel import Panel
+    except ImportError:
+        # Plain text fallback
+        print(f"\n{'─' * 50}")
+        print("NeuralGTO Advice:\n")
+
+        if strategy and strategy.actions:
+            print("GTO Strategy:")
+            for action, freq in sorted(strategy.actions.items(), key=lambda x: -x[1]):
+                marker = "*" if action == strategy.best_action else " "
+                print(f"  {marker} {action:>12s}  {freq*100:5.1f}%")
+            print()
+
+        print(advice)
+        print(f"\n[Confidence: {confidence_label}]")
+        if opponent_notes:
+            print(f'[Villain profile: "{opponent_notes}"]')
+        print(f"{'─' * 50}")
+        return
+
+    console = Console()
+    console.print()
+    console.rule("[bold cyan]NeuralGTO Advice[/bold cyan]")
+
+    # Strategy table
+    if strategy and strategy.actions:
+        table = Table(
+            title="GTO Strategy",
+            show_header=True,
+            header_style="bold magenta",
+        )
+        table.add_column("Action", style="cyan", min_width=12)
+        table.add_column("Freq", justify="right", style="green", min_width=8)
+        table.add_column("Bar", min_width=20)
+
+        for action, freq in sorted(strategy.actions.items(), key=lambda x: -x[1]):
+            pct = f"{freq * 100:.1f}%"
+            bar_len = int(freq * 20)
+            bar = "█" * bar_len + "░" * (20 - bar_len)
+            style = "bold green" if action == strategy.best_action else ""
+            table.add_row(action, pct, bar, style=style)
+
+        console.print(table)
+        console.print()
+
+    # Advice
+    console.print(Panel(advice, title="Advice", border_style="green"))
+
+    # Footer stats
+    stats_parts: list[str] = []
+    stats_parts.append(f"Confidence: [bold]{confidence_label}[/bold]")
+    stats_parts.append(f"Source: {source}")
+    if parse_time > 0:
+        stats_parts.append(f"Parse: {parse_time:.1f}s")
+    if solve_time > 0:
+        stats_parts.append(f"Solve: {solve_time:.1f}s")
+    if cached:
+        stats_parts.append("Cache: [green]HIT[/green]")
+    console.print(" · ".join(stats_parts))
+
+    if opponent_notes:
+        console.print(f'\n[dim]Villain profile: "{opponent_notes}"[/dim]')
+    console.rule()
 
 
 def interactive_mode(
@@ -391,17 +538,12 @@ def interactive_mode(
             continue
         
         try:
-            advice = run_pipeline(
+            result = run_pipeline(
                 user_input,
                 mode=current_mode,
                 opponent_notes=current_opponent_notes,
             )
-            print(f"\n{'─' * 50}")
-            print(f"🎯 PokerGPT Advice:\n")
-            print(advice)
-            if current_opponent_notes:
-                print(f"\n  [Villain profile active: \"{current_opponent_notes}\"]")
-            print(f"\n{'─' * 50}\n")
+            _display_result(result, opponent_notes=current_opponent_notes)
         except Exception as e:
             print(f"\n❌ Error: {e}")
             if config.DEBUG:
@@ -463,6 +605,12 @@ Examples:
     
     if args.debug:
         config.DEBUG = True
+
+    # Startup environment check
+    env_ok = config.check_env()
+    if not env_ok:
+        print("ERROR: GEMINI_API_KEY is required. Cannot continue.")
+        sys.exit(1)
     
     mode = args.mode
     if args.no_solver:
@@ -472,11 +620,8 @@ Examples:
 
     if args.query:
         # Single query mode
-        advice = run_pipeline(args.query, mode=mode, opponent_notes=opponent_notes)
-        print(f"\n{'─' * 50}")
-        print(f"🎯 PokerGPT Advice:\n")
-        print(advice)
-        print(f"\n{'─' * 50}")
+        result = run_pipeline(args.query, mode=mode, opponent_notes=opponent_notes)
+        _display_result(result, opponent_notes=opponent_notes)
     else:
         # Interactive mode
         interactive_mode(default_mode=mode, default_opponent_notes=opponent_notes)

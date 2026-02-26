@@ -20,6 +20,9 @@ venv/
 *.swp
 *.swo
 
+# Internal notes / brainstorm / AI output — not for public repo
+_notes/
+
 # PokerGPT work files
 poker_gpt/_work/
 poker_gpt/_cache/

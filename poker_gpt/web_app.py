@@ -118,6 +118,22 @@ query = st.text_area(
 st.markdown("**Choose analysis mode:**")
 col1, col2, col3 = st.columns(3)
 
+opponent_notes = st.text_input(
+    "🎭 Villain tendencies (optional — for exploitative advice):",
+    value=st.session_state.get("opponent_notes", ""),
+    placeholder=(
+        "e.g. 'calling station, never folds' · 'aggro, raises every street' · "
+        "'nit, folds too much to bets'"
+    ),
+    help=(
+        "Describe what you know about this villain. NeuralGTO will use GTO as the "
+        "baseline and reason about whether to deviate based on these tendencies. "
+        "Leave blank for pure GTO advice."
+    ),
+)
+if opponent_notes != st.session_state.get("opponent_notes", ""):
+    st.session_state["opponent_notes"] = opponent_notes
+
 mode = None
 with col1:
     if st.button("⚡ Fast\n\nLLM-only · ~10s", use_container_width=True):
@@ -160,7 +176,12 @@ if mode:
     t0 = time.time()
 
     try:
-        result = analyze_hand(query, mode=mode, on_status=on_status)
+        result = analyze_hand(
+            query,
+            mode=mode,
+            on_status=on_status,
+            opponent_notes=opponent_notes,
+        )
         elapsed = time.time() - t0
 
         status_container.update(

@@ -37,6 +37,7 @@ def generate_advice(
     scenario: ScenarioData,
     strategy: StrategyResult,
     sanity_note: str = "",
+    opponent_notes: str = "",
 ) -> str:
     """
     Generate natural language poker advice from solver strategy.
@@ -46,6 +47,10 @@ def generate_advice(
         scenario: The parsed scenario data.
         strategy: The extracted solver strategy for hero's hand.
         sanity_note: Optional sanity check note about extreme frequencies.
+        opponent_notes: Optional description of villain tendencies (e.g. "calling
+            station", "aggro maniac", "nit who folds too much"). When provided, the
+            advisor will resolve the GTO mixed strategy into a concrete exploitative
+            action recommendation.
         
     Returns:
         Natural language advice string.
@@ -54,7 +59,7 @@ def generate_advice(
     system_prompt = _load_advisor_prompt()
     
     # Build the context message with all the data
-    context = _build_context_message(user_input, scenario, strategy, sanity_note)
+    context = _build_context_message(user_input, scenario, strategy, sanity_note, opponent_notes)
     
     if config.DEBUG:
         print(f"[NL_ADVISOR] Context message:\n{context[:500]}...")
@@ -96,6 +101,7 @@ def _build_context_message(
     scenario: ScenarioData,
     strategy: StrategyResult,
     sanity_note: str = "",
+    opponent_notes: str = "",
 ) -> str:
     """Build the user message that includes all context for the advisor."""
     
@@ -140,6 +146,15 @@ the extreme frequency and explain why it may be correct or what to watch for.
 
 {sanity_note}
 """
+    if opponent_notes:
+        msg += f"""
+VILLAIN TENDENCY NOTES:
+The user has described the villain as follows. Use this information in your
+"Villain Adjustment" section to recommend a concrete exploitative deviation
+from the GTO baseline. Resolve any mixed strategy into a single action.
+
+  \"{opponent_notes}\"
+"""
     msg += "\nPlease provide your advice to the user based on this solver analysis.\n"
     return msg
 
@@ -178,7 +193,11 @@ should be directionally correct.
 """
 
 
-def generate_fallback_advice(user_input: str, scenario: ScenarioData) -> str:
+def generate_fallback_advice(
+    user_input: str,
+    scenario: ScenarioData,
+    opponent_notes: str = "",
+) -> str:
     """
     Generate poker advice using GPT alone (no solver).
     Used when the solver binary is not available.
@@ -186,12 +205,23 @@ def generate_fallback_advice(user_input: str, scenario: ScenarioData) -> str:
     Args:
         user_input: The original natural language question.
         scenario: The parsed scenario data.
+        opponent_notes: Optional description of villain tendencies.
         
     Returns:
         Natural language advice string.
     """
     client = genai.Client(api_key=config.GEMINI_API_KEY)
     
+    villain_section = ""
+    if opponent_notes:
+        villain_section = f"""
+VILLAIN TENDENCY NOTES:
+Use this to provide an exploitative deviation from the GTO baseline.
+Resolve any mixed strategy into a single concrete action for this villain.
+
+  \"{opponent_notes}\"
+"""
+
     context = f"""USER'S POKER QUESTION:
 {user_input}
 
@@ -206,7 +236,7 @@ PARSED SCENARIO DATA:
 
 OOP range estimate: {scenario.oop_range[:100]}...
 IP range estimate: {scenario.ip_range[:100]}...
-
+{villain_section}
 Please provide GTO-approximate advice for this spot.
 """
     

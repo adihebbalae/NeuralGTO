@@ -61,12 +61,14 @@ from poker_gpt.strategy_extractor import extract_strategy
 from poker_gpt.nl_advisor import generate_advice, generate_fallback_advice
 from poker_gpt.sanity_checker import check_strategy_sanity
 from poker_gpt.cache import compute_cache_key, cache_lookup, cache_store
+from poker_gpt.preflop_lookup import lookup_preflop_strategy, is_preflop_lookup_available
 
 
 def analyze_hand(
     query: str,
     mode: str = "default",
     on_status: Optional[Callable[[str], None]] = None,
+    opponent_notes: str = "",
 ) -> dict:
     """
     Core analysis function — used by both CLI and web UI.
@@ -78,6 +80,8 @@ def analyze_hand(
         query: Natural language poker question.
         mode: Analysis mode — "fast", "default", or "pro".
         on_status: Optional callback for progress updates (e.g., for web UI).
+        opponent_notes: Optional description of villain tendencies used to
+            produce an exploitative deviation from the GTO baseline.
         
     Returns:
         dict with keys: advice, mode, scenario, strategy, sanity_note,
@@ -109,11 +113,51 @@ def analyze_hand(
     # ── Check if we should use the solver ──
     use_solver = preset.get("use_solver", True) and config.USE_SOLVER and is_solver_available()
 
+    # ── Step 1.5: Preflop lookup (pre-solved GTO ranges) ──
+    # If this is a preflop scenario, try the instant lookup before falling back
+    # to either the solver (which can't do preflop) or LLM-only mode.
+    if scenario.current_street == "preflop":
+        _status("Preflop detected — checking pre-solved GTO ranges...")
+        t_pf = time.time()
+        try:
+            preflop_strategy = lookup_preflop_strategy(scenario)
+        except Exception as e:
+            preflop_strategy = None
+            if config.DEBUG:
+                _status(f"  Preflop lookup error (non-fatal): {e}")
+
+        if preflop_strategy is not None:
+            _status(
+                f"  \u2713 Preflop GTO match in {time.time()-t_pf:.2f}s — "
+                f"Best: {preflop_strategy.best_action} "
+                f"({preflop_strategy.best_action_freq:.0%})"
+            )
+            # Generate advice using the preflop strategy (solver-quality data)
+            _status("Generating advice from pre-solved GTO strategy...")
+            t_adv = time.time()
+            advice = generate_advice(
+                query, scenario, preflop_strategy,
+                opponent_notes=opponent_notes,
+            )
+            _status(f"  \u2713 Generated in {time.time()-t_adv:.1f}s")
+            return {
+                "advice": advice,
+                "mode": mode,
+                "scenario": scenario,
+                "strategy": preflop_strategy,
+                "sanity_note": "",
+                "cached": True,  # Effectively cached — instant lookup
+                "solve_time": 0.0,
+                "source": "preflop_lookup",
+            }
+        else:
+            _status("  No exact preflop match — falling back to LLM mode")
+
     if not use_solver:
         # ── Fast / LLM-only mode ──
         _status("Generating GTO-approximate advice via Gemini (LLM-only)...")
         t1 = time.time()
-        advice = generate_fallback_advice(query, scenario)
+        advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
         _status(f"  ✓ Generated in {time.time()-t1:.1f}s")
         return {
             "advice": advice,
@@ -155,7 +199,7 @@ def analyze_hand(
         except RuntimeError as e:
             _status(f"  ✗ Solver failed: {e}")
             _status("  Falling back to LLM-only mode...")
-            advice = generate_fallback_advice(query, scenario)
+            advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
             return {
                 "advice": advice,
                 "mode": mode,
@@ -169,7 +213,7 @@ def analyze_hand(
 
         if output_file is None:
             _status("  Solver unavailable — falling back to LLM-only...")
-            advice = generate_fallback_advice(query, scenario)
+            advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
             return {
                 "advice": advice,
                 "mode": mode,
@@ -200,7 +244,7 @@ def analyze_hand(
     except (ValueError, KeyError) as e:
         _status(f"  ✗ Strategy extraction failed: {e}")
         _status("  Falling back to LLM-only mode...")
-        advice = generate_fallback_advice(query, scenario)
+        advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
         return {
             "advice": advice,
             "mode": mode,
@@ -228,7 +272,11 @@ def analyze_hand(
     # ── Step 5: Generate natural language advice ──
     _status("Step 5/5: Generating advice...")
     t4 = time.time()
-    advice = generate_advice(query, scenario, strategy, sanity_note=sanity_note)
+    advice = generate_advice(
+        query, scenario, strategy,
+        sanity_note=sanity_note,
+        opponent_notes=opponent_notes,
+    )
     _status(f"  ✓ Generated in {time.time()-t4:.1f}s")
 
     return {
@@ -247,22 +295,35 @@ def analyze_hand(
 # CLI Interface (wraps analyze_hand with printing)
 # ──────────────────────────────────────────────
 
-def run_pipeline(user_input: str, mode: str = "default") -> str:
+def run_pipeline(
+    user_input: str,
+    mode: str = "default",
+    opponent_notes: str = "",
+) -> str:
     """
     Run the full PokerGPT pipeline with CLI-friendly output.
     
     Args:
         user_input: Natural language poker question.
         mode: "fast", "default", or "pro".
+        opponent_notes: Optional villain tendency description.
         
     Returns:
         Natural language advice string.
     """
-    result = analyze_hand(user_input, mode=mode, on_status=lambda msg: print(msg))
+    result = analyze_hand(
+        user_input,
+        mode=mode,
+        on_status=lambda msg: print(msg),
+        opponent_notes=opponent_notes,
+    )
     return result["advice"]
 
 
-def interactive_mode(default_mode: str = "default"):
+def interactive_mode(
+    default_mode: str = "default",
+    default_opponent_notes: str = "",
+):
     """Run PokerGPT in interactive mode (REPL)."""
     print("=" * 60)
     print("  PokerGPT — Neuro-Symbolic Poker Advisor")
@@ -283,11 +344,16 @@ def interactive_mode(default_mode: str = "default"):
     print(f"\n  Solver: {solver_status}")
     print(f"  Model: {config.GEMINI_MODEL}")
     print(f"  Mode: {default_mode}")
+    if default_opponent_notes:
+        print(f"  Villain profile: {default_opponent_notes}")
     print(f"\nDescribe your poker hand and I'll give you GTO advice.")
     print("Type 'quit' or 'exit' to stop.")
-    print("Type 'mode fast/default/pro' to change mode.\n")
+    print("Type 'mode fast/default/pro' to change mode.")
+    print("Type 'opponent <description>' to set villain tendencies (e.g. 'opponent calling station').")
+    print("Type 'opponent clear' to remove villain tendencies.\n")
     
     current_mode = default_mode
+    current_opponent_notes = default_opponent_notes
     
     while True:
         try:
@@ -311,12 +377,30 @@ def interactive_mode(default_mode: str = "default"):
             else:
                 print(f"  Unknown mode '{new_mode}'. Use: fast, default, pro")
             continue
+
+        # Villain tendency setting
+        if user_input.lower().startswith("opponent "):
+            notes = user_input.split(" ", 1)[1].strip()
+            if notes.lower() == "clear":
+                current_opponent_notes = ""
+                print("  → Villain profile cleared. Advice will be pure GTO.")
+            else:
+                current_opponent_notes = notes
+                print(f"  → Villain profile set: \"{current_opponent_notes}\"")
+                print("  Advice will now include exploitative adjustments for this villain.")
+            continue
         
         try:
-            advice = run_pipeline(user_input, mode=current_mode)
+            advice = run_pipeline(
+                user_input,
+                mode=current_mode,
+                opponent_notes=current_opponent_notes,
+            )
             print(f"\n{'─' * 50}")
             print(f"🎯 PokerGPT Advice:\n")
             print(advice)
+            if current_opponent_notes:
+                print(f"\n  [Villain profile active: \"{current_opponent_notes}\"]")
             print(f"\n{'─' * 50}\n")
         except Exception as e:
             print(f"\n❌ Error: {e}")
@@ -338,6 +422,8 @@ Examples:
   python -m poker_gpt.main --mode pro --query "..."
   python -m poker_gpt.main --mode fast --query "Quick preflop question..."
   python -m poker_gpt.main --no-solver --debug
+  python -m poker_gpt.main --opponent "calling station, never folds" --query "I have QQ on BTN..."
+  python -m poker_gpt.main --opponent "aggressive, raises every street" --query "..."
         """,
     )
     parser.add_argument(
@@ -358,6 +444,16 @@ Examples:
         help="Force LLM-only mode (equivalent to --mode fast)",
     )
     parser.add_argument(
+        "--opponent", "-o",
+        type=str,
+        default=None,
+        help=(
+            'Describe villain tendencies in plain English. Used to adjust the '
+            'GTO recommendation exploitatively. '
+            'Example: --opponent "calling station, never folds to bets"'
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug output",
@@ -372,16 +468,18 @@ Examples:
     if args.no_solver:
         mode = "fast"
     
+    opponent_notes = args.opponent or ""
+
     if args.query:
         # Single query mode
-        advice = run_pipeline(args.query, mode=mode)
+        advice = run_pipeline(args.query, mode=mode, opponent_notes=opponent_notes)
         print(f"\n{'─' * 50}")
         print(f"🎯 PokerGPT Advice:\n")
         print(advice)
         print(f"\n{'─' * 50}")
     else:
         # Interactive mode
-        interactive_mode(default_mode=mode)
+        interactive_mode(default_mode=mode, default_opponent_notes=opponent_notes)
 
 
 if __name__ == "__main__":

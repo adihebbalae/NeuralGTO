@@ -39,8 +39,8 @@ Pipeline Steps:
 
 Analysis Modes:
     - fast:    LLM-only (~10s)         — no solver, Gemini approximation
-    - default: Solver low accuracy     — 2% exploitability, 100 iterations (~1-2 min)
-    - pro:     Solver high accuracy    — 0.3% exploitability, 500 iterations (~4-6 min)
+    - default: Solver ~98% accuracy    — 2% exploitability, 100 iterations (~1-2 min)
+    - pro:     Solver ~99.7% accuracy  — 0.3% exploitability, 500 iterations (~4-6 min)
 
 Dependencies installed:
     - google-genai (pip install google-genai)

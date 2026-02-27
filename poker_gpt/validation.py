@@ -2,13 +2,17 @@
 validation.py — Input validation for parsed poker scenarios.
 
 Validates ScenarioData fields before sending to the solver or advisor.
+Also provides pre-parse query completeness checks to catch vague queries
+before they hit the Gemini API (saving tokens).
 Returns a list of human-readable error strings (empty = valid).
 
 Created: 2026-02-26
+Updated: 2026-02-27 — Added pre-parse query validation, duplicate card detection
 
 DOCUMENTATION:
-    Used by main.py after parse_scenario() returns a ScenarioData.
-    If validation fails, the pipeline returns a helpful error message
+    validate_query_completeness(query) — called BEFORE parse_scenario().
+    validate_scenario(scenario)        — called AFTER  parse_scenario().
+    If either returns errors, the pipeline returns a helpful message
     instead of crashing or producing nonsensical output.
 """
 
@@ -23,12 +27,114 @@ _SUITS = set("hdcs")
 _VALID_POSITIONS = {"UTG", "HJ", "CO", "BTN", "SB", "BB"}
 _VALID_STREETS = {"preflop", "flop", "turn", "river"}
 
+# ──────────────────────────────────────────────
+# Regex patterns for pre-parse query validation
+# ──────────────────────────────────────────────
+
+# Card / hand patterns: "AKs", "AKo", "AA", "pocket queens", "pair of", "Jd Td",
+# rank names, suited/offsuit, etc.
+_HAND_PATTERN = re.compile(
+    r"""
+    (?:pocket\s+\w+)                  # "pocket queens", "pocket aces"
+    | (?:pair\s+of\s+\w+)             # "pair of kings"
+    | (?:[2-9TJQKA][hdcs]\s*[2-9TJQKA][hdcs])  # "QhQd", "Ah Ks"
+    | (?:[2-9TJQKA]{2}[so]?)          # "AKs", "QQ", "T9o"
+    | (?:aces|kings|queens|jacks|tens|nines|eights|sevens|sixes|fives|fours|threes|twos|deuces)
+    | (?:ace[- ]king|ace[- ]queen|king[- ]queen|king[- ]jack)
+    | (?:big\s+slick)                 # slang for AK
+    | (?:rockets|cowboys|ladies|hooks|ducks|crabs|sailboats|snowmen)
+    | (?:suited|offsuit|sooted)
+    | (?:hold(?:ing)?|have|got|dealt|my\s+hand)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Position patterns: full names and abbreviations
+_POSITION_PATTERN = re.compile(
+    r"""
+    \b(?:button|btn|cutoff|cut-off|cut\s+off|co
+    | under\s*the\s*gun|utg|utg\+1|utg\+2
+    | hijack|hj|lojack|lj
+    | small\s*blind|sb|big\s*blind|bb
+    | mp|middle\s*position|ep|early\s*position
+    | late\s*position|lp|straddle)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 
 def _is_valid_card(card: str) -> bool:
     """Check if a string represents a valid poker card (e.g., 'Qh', 'Ts')."""
     if len(card) != 2:
         return False
     return card[0] in _RANKS and card[1] in _SUITS
+
+
+def _extract_cards(hand_or_board: str) -> list[str]:
+    """Extract individual 2-char cards from a hand or board string.
+
+    Handles both 'QhQd' (concatenated) and 'Ts,9d,4h' (comma-separated).
+    """
+    cards: list[str] = []
+    if not hand_or_board:
+        return cards
+    if "," in hand_or_board:
+        for part in hand_or_board.split(","):
+            part = part.strip()
+            if len(part) == 2:
+                cards.append(part)
+    else:
+        for i in range(0, len(hand_or_board) - 1, 2):
+            cards.append(hand_or_board[i : i + 2])
+    return cards
+
+
+def validate_query_completeness(query: str) -> list[str]:
+    """
+    Check a raw query string for completeness BEFORE sending to Gemini.
+
+    This catches vague or incomplete queries early, saving API tokens.
+
+    Args:
+        query: The raw natural-language poker question.
+
+    Returns:
+        List of error strings. Empty list means the query looks complete enough.
+    """
+    errors: list[str] = []
+    if not query or not query.strip():
+        errors.append(
+            "Your query is empty. Please describe your poker hand. "
+            "Example: 'I have AKs on the CO, facing a 3bet from the BTN. "
+            "100bb effective.'"
+        )
+        return errors
+
+    q = query.strip()
+
+    # Too short
+    if len(q) < 10:
+        errors.append(
+            "Your query is too short. Please describe your poker hand in more "
+            "detail. Example: 'I have AKs on the CO, facing a 3bet from the "
+            "BTN. 100bb effective.'"
+        )
+
+    # No hand / cards mentioned
+    if not _HAND_PATTERN.search(q):
+        errors.append(
+            "Please specify your hole cards (e.g., 'I have AKs', "
+            "'I hold pocket queens', 'My hand is Jd Td')."
+        )
+
+    # No position mentioned
+    if not _POSITION_PATTERN.search(q):
+        errors.append(
+            "Please mention your position (e.g., 'on the button', "
+            "'in the CO', 'UTG')."
+        )
+
+    return errors
 
 
 def validate_scenario(scenario: ScenarioData) -> list[str]:
@@ -135,15 +241,33 @@ def validate_scenario(scenario: ScenarioData) -> list[str]:
             "Try providing more context about the action."
         )
 
+    # --- Duplicate card detection (hero hand + board) ---
+    hero_cards = _extract_cards(hand)
+    board_cards = _extract_cards(board)
+    all_cards = hero_cards + board_cards
+    seen: set[str] = set()
+    for card in all_cards:
+        if not _is_valid_card(card):
+            continue
+        if card in seen:
+            errors.append(
+                f"Duplicate card detected: '{card}' appears in both your hand "
+                f"and the board (or is repeated). Each card can only appear once "
+                f"in a deck — please double-check your input."
+            )
+        seen.add(card)
+
     return errors
 
 
-def format_validation_errors(errors: list[str]) -> str:
+def format_validation_errors(errors: list[str], header: str = "") -> str:
     """
     Format a list of validation errors into a user-friendly message.
 
     Args:
-        errors: List of error strings from validate_scenario().
+        errors: List of error strings from validate_scenario() or
+            validate_query_completeness().
+        header: Optional custom header line. If empty, a default is used.
 
     Returns:
         A formatted string explaining what went wrong and how to fix it.
@@ -151,14 +275,16 @@ def format_validation_errors(errors: list[str]) -> str:
     if not errors:
         return ""
 
-    lines = [
-        "I couldn't fully understand your poker scenario. Here's what needs clarification:\n"
-    ]
+    default_header = (
+        "I couldn't fully understand your poker scenario. "
+        "Here's what needs clarification:"
+    )
+    lines = [header or default_header, ""]
     for i, err in enumerate(errors, 1):
         lines.append(f"  {i}. {err}")
 
     lines.append(
-        "\nTry rephrasing with more detail. Example:\n"
+        "\nTip: Try rephrasing with more detail. Example:\n"
         '  "I have QQ on the button, UTG raises to 3bb, I call. '
         'Flop is Ts 9d 4h, villain checks. Pot is 20bb, stacks are 90bb."'
     )

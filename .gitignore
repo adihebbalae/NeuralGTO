@@ -3,6 +3,9 @@
 !.env.example
 .github/
 
+# Streamlit secrets (actual file — not the .example)
+.streamlit/secrets.toml
+
 # Python
 __pycache__/
 *.py[cod]

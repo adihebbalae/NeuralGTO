@@ -39,8 +39,8 @@ Pipeline Steps:
 
 Analysis Modes:
     - fast:    LLM-only (~10s)         — no solver, Gemini approximation
-    - default: Solver low accuracy     — 2% exploitability, 100 iterations (~1-2 min)
-    - pro:     Solver high accuracy    — 0.3% exploitability, 500 iterations (~4-6 min)
+    - default: Solver ~98% accuracy    — 2% exploitability, 100 iterations (~1-2 min)
+    - pro:     Solver ~99.7% accuracy  — 0.3% exploitability, 500 iterations (~4-6 min)
 
 Dependencies installed:
     - google-genai (pip install google-genai)
@@ -62,7 +62,14 @@ from poker_gpt.nl_advisor import generate_advice, generate_fallback_advice
 from poker_gpt.sanity_checker import check_strategy_sanity
 from poker_gpt.cache import compute_cache_key, cache_lookup, cache_store
 from poker_gpt.preflop_lookup import lookup_preflop_strategy, is_preflop_lookup_available
-from poker_gpt.validation import validate_scenario, format_validation_errors
+from poker_gpt.validation import validate_scenario, validate_query_completeness, format_validation_errors
+from poker_gpt.history import log_query, get_history
+from poker_gpt.range_display import render_range_grid_rich
+from poker_gpt.hand_history import (
+    parse_hand_history_file,
+    hand_to_query,
+    hands_summary,
+)
 
 
 # ──────────────────────────────────────────────
@@ -118,6 +125,27 @@ def analyze_hand(
 
     config.ensure_work_dir()
     preset = config.MODE_PRESETS.get(mode, config.MODE_PRESETS["default"])
+
+    # ── Step 0: Pre-parse query validation (saves Gemini tokens) ──
+    query_errors = validate_query_completeness(query)
+    if query_errors:
+        error_msg = format_validation_errors(
+            query_errors,
+            header="Your query seems incomplete — here's what's missing:",
+        )
+        _status(f"  ⚠ Query too vague ({len(query_errors)} issue(s)) — skipping API call")
+        return {
+            "advice": error_msg,
+            "mode": mode,
+            "scenario": None,
+            "strategy": None,
+            "sanity_note": "",
+            "cached": False,
+            "solve_time": 0.0,
+            "source": "validation_error",
+            "confidence": "low",
+            "parse_time": 0.0,
+        }
 
     # ── Step 1: Parse natural language → structured scenario ──
     _status("Step 1/5: Parsing your poker scenario...")
@@ -235,7 +263,9 @@ def analyze_hand(
         cached = True
     else:
         # ── Step 3: Run the solver ──
-        mode_label = f"{mode} mode — accuracy {preset.get('accuracy', '?')}%"
+        exploitability = preset.get('accuracy', 0)
+        accuracy_pct = 100 - exploitability if exploitability else '?'
+        mode_label = f"{mode} mode — {accuracy_pct}% accuracy"
         _status(f"Step 3/5: Running TexasSolver ({mode_label})...")
         t2 = time.time()
         try:
@@ -447,6 +477,11 @@ def _display_result(result: dict, opponent_notes: str = "") -> None:
         console.print(table)
         console.print()
 
+        # Range grid: show where the hand sits in the 13x13 grid
+        if strategy.hand:
+            render_range_grid_rich(strategy.actions, hand=strategy.hand)
+            console.print()
+
     # Advice
     console.print(Panel(advice, title="Advice", border_style="green"))
 
@@ -497,7 +532,9 @@ def interactive_mode(
     print("Type 'quit' or 'exit' to stop.")
     print("Type 'mode fast/default/pro' to change mode.")
     print("Type 'opponent <description>' to set villain tendencies (e.g. 'opponent calling station').")
-    print("Type 'opponent clear' to remove villain tendencies.\n")
+    print("Type 'opponent clear' to remove villain tendencies.")
+    print("Type 'history' to see your recent queries.")
+    print("Type 'import <filepath>' to import a hand history file.\n")
     
     current_mode = default_mode
     current_opponent_notes = default_opponent_notes
@@ -537,6 +574,33 @@ def interactive_mode(
                 print("  Advice will now include exploitative adjustments for this villain.")
             continue
         
+        # History command
+        if user_input.lower() in ("history", "hist"):
+            entries = get_history(limit=10)
+            if not entries:
+                print("  No history yet.")
+            else:
+                print(f"  Last {len(entries)} queries:")
+                for i, e in enumerate(entries, 1):
+                    ts = e.get("timestamp", "")[:19].replace("T", " ")
+                    hand = e.get("hero_hand", "?")
+                    pos = e.get("hero_position", "?")
+                    act = e.get("best_action", "?")
+                    src = e.get("source", "?")
+                    print(f"  {i:>2}. [{ts}] {hand} @ {pos} -> {act}  ({src})")
+            continue
+
+        # Import hand history command
+        if user_input.lower().startswith("import "):
+            hh_path = user_input.split(" ", 1)[1].strip().strip('"').strip("'")
+            _handle_import_hh(
+                hh_path,
+                hero_name="",
+                mode=current_mode,
+                opponent_notes=current_opponent_notes,
+            )
+            continue
+
         try:
             result = run_pipeline(
                 user_input,
@@ -544,12 +608,77 @@ def interactive_mode(
                 opponent_notes=current_opponent_notes,
             )
             _display_result(result, opponent_notes=current_opponent_notes)
+            log_query(result, user_input, opponent_notes=current_opponent_notes)
         except Exception as e:
             print(f"\n❌ Error: {e}")
             if config.DEBUG:
                 import traceback
                 traceback.print_exc()
             print("Please try rephrasing your question.\n")
+
+
+def _handle_import_hh(
+    filepath: str,
+    hero_name: str,
+    mode: str = "default",
+    opponent_notes: str = "",
+) -> None:
+    """
+    Import a hand history file, let user pick a hand, and analyze it.
+
+    Args:
+        filepath: Path to the hand history file.
+        hero_name: Hero's player name (empty = auto-detect).
+        mode: Analysis mode.
+        opponent_notes: Villain tendency description.
+    """
+    import os
+    if not os.path.isfile(filepath):
+        print(f"  \u2717 File not found: {filepath}")
+        return
+
+    try:
+        hands = parse_hand_history_file(filepath, hero_name=hero_name)
+    except Exception as e:
+        print(f"  \u2717 Error reading file: {e}")
+        return
+
+    if not hands:
+        print("  No parseable hands found in file.")
+        return
+
+    print(f"\n  Found {len(hands)} hand(s):\n")
+    summaries = hands_summary(hands)
+    for s in summaries:
+        print(f"    {s}")
+
+    print()
+    while True:
+        try:
+            choice = input(f"  Pick a hand (1-{len(hands)}) or 'cancel': ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if choice.lower() in ("cancel", "c", "q"):
+            return
+        if choice.isdigit() and 1 <= int(choice) <= len(hands):
+            idx = int(choice) - 1
+            break
+        print(f"  Invalid choice. Enter a number 1-{len(hands)}.")
+
+    selected = hands[idx]
+    query = hand_to_query(selected)
+    print(f"\n  Query: {query}\n")
+
+    try:
+        result = run_pipeline(query, mode=mode, opponent_notes=opponent_notes)
+        _display_result(result, opponent_notes=opponent_notes)
+        log_query(result, query, opponent_notes=opponent_notes)
+    except Exception as e:
+        print(f"\n\u274c Error: {e}")
+        if config.DEBUG:
+            import traceback
+            traceback.print_exc()
 
 
 def main():
@@ -596,6 +725,24 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--import-hh",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Import a hand history file and analyze a hand from it",
+    )
+    parser.add_argument(
+        "--hero-name",
+        type=str,
+        default="",
+        help="Hero player name for hand history import (auto-detected if omitted)",
+    )
+    parser.add_argument(
+        "--history",
+        action="store_true",
+        help="Show recent query history and exit",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug output",
@@ -605,6 +752,25 @@ Examples:
     
     if args.debug:
         config.DEBUG = True
+
+    # --history flag: print recent history and exit
+    if args.history:
+        entries = get_history(limit=50)
+        if not entries:
+            print("No history yet.")
+        else:
+            print(f"Last {len(entries)} queries:\n")
+            for i, e in enumerate(entries, 1):
+                ts = e.get("timestamp", "")[:19].replace("T", " ")
+                hand = e.get("hero_hand", "?")
+                pos = e.get("hero_position", "?")
+                act = e.get("best_action", "?")
+                freq = e.get("best_action_freq")
+                src = e.get("source", "?")
+                mode_str = e.get("mode", "?")
+                freq_str = f" ({freq:.0%})" if freq is not None else ""
+                print(f"  {i:>2}. [{ts}] {hand} @ {pos} -> {act}{freq_str}  [{src}, {mode_str}]")
+        sys.exit(0)
 
     # Startup environment check
     env_ok = config.check_env()
@@ -618,10 +784,19 @@ Examples:
     
     opponent_notes = args.opponent or ""
 
-    if args.query:
+    if args.import_hh:
+        # Hand history import mode
+        _handle_import_hh(
+            args.import_hh,
+            hero_name=args.hero_name,
+            mode=mode,
+            opponent_notes=opponent_notes,
+        )
+    elif args.query:
         # Single query mode
         result = run_pipeline(args.query, mode=mode, opponent_notes=opponent_notes)
         _display_result(result, opponent_notes=opponent_notes)
+        log_query(result, args.query, opponent_notes=opponent_notes)
     else:
         # Interactive mode
         interactive_mode(default_mode=mode, default_opponent_notes=opponent_notes)

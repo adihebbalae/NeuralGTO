@@ -20,6 +20,33 @@ from pathlib import Path
 from poker_gpt import config
 
 
+def _platform_solver_message() -> str:
+    """Return a platform-specific message when the solver binary is missing."""
+    binary = Path(config.SOLVER_BINARY_PATH)
+    if config.IS_WINDOWS:
+        return (
+            f"[SOLVER_RUNNER] Windows solver (console_solver.exe) "
+            f"not found at: {binary}\n"
+            f"[SOLVER_RUNNER] Download from https://github.com/bupticybee/TexasSolver/releases"
+        )
+    elif config.IS_LINUX:
+        return (
+            f"[SOLVER_RUNNER] Linux solver (console_solver) "
+            f"not found at: {binary}\n"
+            f"[SOLVER_RUNNER] Download the Linux release from "
+            f"https://github.com/bupticybee/TexasSolver/releases\n"
+            f"[SOLVER_RUNNER] Ensure the binary has execute permissions: chmod +x {binary.name}"
+        )
+    else:  # macOS / Darwin
+        return (
+            f"[SOLVER_RUNNER] macOS solver (console_solver) "
+            f"not found at: {binary}\n"
+            f"[SOLVER_RUNNER] Download the macOS/Linux release from "
+            f"https://github.com/bupticybee/TexasSolver/releases\n"
+            f"[SOLVER_RUNNER] Ensure the binary has execute permissions: chmod +x {binary.name}"
+        )
+
+
 def run_solver(input_file: Path = None, timeout: int = None) -> Path | None:
     """
     Execute the TexasSolver binary with the given input file.
@@ -44,8 +71,9 @@ def run_solver(input_file: Path = None, timeout: int = None) -> Path | None:
     
     # Check if solver binary exists
     if not binary_path.exists():
-        print(f"[SOLVER_RUNNER] Solver binary not found at: {binary_path}")
-        print(f"[SOLVER_RUNNER] Will use GPT-only fallback mode.")
+        msg = _platform_solver_message()
+        print(msg)
+        print("[SOLVER_RUNNER] Will use GPT-only fallback mode.")
         return None
     
     if not resources_path.exists():
@@ -115,7 +143,18 @@ def run_solver(input_file: Path = None, timeout: int = None) -> Path | None:
 
 
 def is_solver_available() -> bool:
-    """Check if the solver binary is available and can run."""
+    """Check if the solver binary is available and can run.
+
+    Checks for the platform-appropriate binary name:
+      - Windows: console_solver.exe
+      - Linux/Mac: console_solver
+
+    Returns:
+        True if both the binary and resources directory exist.
+    """
     binary_path = Path(config.SOLVER_BINARY_PATH)
     resources_path = Path(config.SOLVER_RESOURCES_PATH)
-    return binary_path.exists() and resources_path.exists()
+    available = binary_path.exists() and resources_path.exists()
+    if not available and config.DEBUG:
+        print(_platform_solver_message())
+    return available

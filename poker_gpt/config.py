@@ -16,6 +16,7 @@ DOCUMENTATION:
 """
 
 import os
+import platform
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -24,9 +25,25 @@ _PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
 # ──────────────────────────────────────────────
+# Platform Detection
+# ──────────────────────────────────────────────
+PLATFORM = platform.system()  # "Windows", "Linux", "Darwin"
+IS_WINDOWS = PLATFORM == "Windows"
+IS_LINUX = PLATFORM == "Linux"
+IS_MAC = PLATFORM == "Darwin"
+
+# ──────────────────────────────────────────────
 # Google Gemini Configuration
 # ──────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# Fallback: try Streamlit secrets when running in Streamlit Cloud
+if not GEMINI_API_KEY:
+    try:
+        import streamlit as st  # noqa: E402
+        GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        pass  # Not running inside Streamlit, or secrets not configured
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")  # gemini-2.5-flash for best speed+quality
 GEMINI_TEMPERATURE = 0.1  # Low temperature for deterministic parsing
 
@@ -35,9 +52,11 @@ GEMINI_TEMPERATURE = 0.1  # Low temperature for deterministic parsing
 # ──────────────────────────────────────────────
 # Path to the TexasSolver console binary
 # Download from: https://github.com/bupticybee/TexasSolver/releases
+_SOLVER_BINARY_NAME = "console_solver.exe" if IS_WINDOWS else "console_solver"
+_SOLVER_DIR_SUFFIX = "Windows" if IS_WINDOWS else "Linux" if IS_LINUX else "Mac"
 SOLVER_BINARY_PATH = os.getenv(
     "SOLVER_BINARY_PATH",
-    str(_PROJECT_ROOT / "solver_bin" / "TexasSolver-v0.2.0-Windows" / "console_solver.exe")
+    str(_PROJECT_ROOT / "solver_bin" / f"TexasSolver-v0.2.0-{_SOLVER_DIR_SUFFIX}" / _SOLVER_BINARY_NAME)
 )
 
 # Path to the TexasSolver resources directory (contains compairer data)
@@ -97,7 +116,7 @@ MODE_PRESETS = {
         "max_iterations": 100,
         "timeout": 180,
         "dump_rounds": 2,
-        "description": "Solver low accuracy (~1-2 min) — Good GTO approximation",
+        "description": "Solver ~98% accuracy (2% exploitability, ~1-2 min)",
     },
     "pro": {
         "use_solver": True,
@@ -105,7 +124,7 @@ MODE_PRESETS = {
         "max_iterations": 500,
         "timeout": 600,
         "dump_rounds": 3,
-        "description": "Solver high accuracy (~4-6 min) — Precise GTO solution",
+        "description": "Solver ~99.7% accuracy (0.3% exploitability, ~4-6 min)",
     },
 }
 
@@ -150,14 +169,36 @@ def check_env() -> bool:
     issues_found = False
     lines: list[str] = []
 
+    # --- Platform info ---
+    lines.append(f"  ℹ Platform: {PLATFORM} ({platform.machine()})")
+    if not IS_WINDOWS:
+        lines.append(
+            "  ℹ Solver note: TexasSolver Linux/Mac binaries must be downloaded "
+            "separately from https://github.com/bupticybee/TexasSolver/releases"
+        )
+
+    # --- .env file existence ---
+    env_file = _PROJECT_ROOT / ".env"
+    if not env_file.exists():
+        lines.append("  ✗ .env file not found")
+        lines.append("    → Copy .env.example to .env and fill in your keys:")
+        lines.append("      cp .env.example .env")
+        issues_found = True
+
     # --- GEMINI_API_KEY ---
     if GEMINI_API_KEY and GEMINI_API_KEY != "your-gemini-api-key-here":
-        lines.append("  ✓ GEMINI_API_KEY: set")
+        if not GEMINI_API_KEY.startswith("AIza"):
+            lines.append("  ⚠ GEMINI_API_KEY: set but doesn't look like a valid Gemini key (expected 'AIza...')")
+        else:
+            lines.append("  ✓ GEMINI_API_KEY: set")
     else:
         lines.append("  ✗ GEMINI_API_KEY: not set")
         lines.append("    → Create a .env file with: GEMINI_API_KEY=your-key-here")
         lines.append("    → Get a key at https://aistudio.google.com/apikey")
         issues_found = True
+
+    # --- Model ---
+    lines.append(f"  ℹ Model: {GEMINI_MODEL}")
 
     # --- SOLVER_BINARY_PATH ---
     solver_path = Path(SOLVER_BINARY_PATH)

@@ -39,6 +39,15 @@ from poker_gpt.security import (
     record_daily_usage,
     MAX_REQUESTS_PER_SESSION,
 )
+from poker_gpt.auth import (
+    register,
+    login,
+    check_free_tier,
+    record_user_usage,
+    check_user_daily_limit,
+    get_user_stats,
+    FREE_USES_PER_SESSION,
+)
 
 
 # ──────────────────────────────────────────────
@@ -97,6 +106,9 @@ if "session_id" not in st.session_state:
     import uuid
     st.session_state["session_id"] = str(uuid.uuid4())
     st.session_state["request_count"] = 0
+    st.session_state["free_uses"] = 0  # analyses done anonymously this session
+    st.session_state["authenticated"] = False
+    st.session_state["user_email"] = None
 
 st.set_page_config(
     page_title="PokerGPT",
@@ -138,6 +150,50 @@ with st.sidebar:
     st.markdown(f"**Session requests:** {_req_count} / {MAX_REQUESTS_PER_SESSION}")
     _within, _daily_remaining = check_daily_budget()
     st.markdown(f"**Daily remaining:** {_daily_remaining}")
+
+    # ── Account section ──
+    st.divider()
+    st.markdown("### 🔐 Account")
+    if st.session_state.get("authenticated"):
+        _email = st.session_state["user_email"]
+        st.markdown(f"Signed in as **{_email}**")
+        _ustats = get_user_stats(_email)
+        st.caption(
+            f"Today: {_ustats['today_queries']} queries · "
+            f"Total: {_ustats['total_queries']} · "
+            f"Since {_ustats['member_since']}"
+        )
+        if st.button("Sign out"):
+            st.session_state["authenticated"] = False
+            st.session_state["user_email"] = None
+            st.rerun()
+    else:
+        _free_left = max(FREE_USES_PER_SESSION - st.session_state.get("free_uses", 0), 0)
+        st.markdown(f"**Free uses left:** {_free_left}")
+        st.caption("Sign in for unlimited daily access.")
+        _auth_tab = st.radio("", ["Sign in", "Register"], horizontal=True, label_visibility="collapsed")
+        _auth_email = st.text_input("Email", key="auth_email")
+        _auth_pass = st.text_input("Password", type="password", key="auth_pass")
+        if _auth_tab == "Sign in":
+            if st.button("Sign in", use_container_width=True, type="primary"):
+                ok, msg = login(_auth_email, _auth_pass)
+                if ok:
+                    st.session_state["authenticated"] = True
+                    st.session_state["user_email"] = _auth_email.strip().lower()
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+        else:
+            if st.button("Create account", use_container_width=True, type="primary"):
+                ok, msg = register(_auth_email, _auth_pass)
+                if ok:
+                    st.session_state["authenticated"] = True
+                    st.session_state["user_email"] = _auth_email.strip().lower()
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
     st.divider()
     st.markdown("""
@@ -302,6 +358,24 @@ if mode:
         st.error(f"🚫 Request blocked: {reason}")
         st.stop()
 
+    # ── Auth / free-tier gate ────────────────────
+    if not st.session_state.get("authenticated"):
+        free_uses = st.session_state.get("free_uses", 0)
+        allowed, remaining = check_free_tier(free_uses)
+        if not allowed:
+            st.warning(
+                "🔒 **Free use exhausted.** Sign in (sidebar) for unlimited daily access."
+            )
+            st.stop()
+        # Will be incremented after successful analysis
+    else:
+        # Authenticated user — check their personal daily limit
+        _user_email = st.session_state["user_email"]
+        _user_ok, _user_remaining = check_user_daily_limit(_user_email)
+        if not _user_ok:
+            st.error("🚫 You've reached your daily limit. Try again tomorrow.")
+            st.stop()
+
     # Track session usage
     st.session_state["request_count"] = st.session_state.get("request_count", 0) + 1
 
@@ -375,6 +449,12 @@ See `.streamlit/secrets.toml.example` for the template.
 
         # Record daily usage after a successful analysis
         record_daily_usage()
+
+        # Track auth: increment free uses or record user usage
+        if not st.session_state.get("authenticated"):
+            st.session_state["free_uses"] = st.session_state.get("free_uses", 0) + 1
+        else:
+            record_user_usage(st.session_state["user_email"])
 
         # ── Results Section ──
         st.divider()

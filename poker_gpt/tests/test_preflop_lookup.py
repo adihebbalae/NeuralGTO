@@ -83,6 +83,21 @@ class TestNormalizePosition:
     def test_hj_maps_to_mp(self):
         assert _normalize_position("HJ") == "MP"
 
+    def test_lj_maps_to_mp(self):
+        assert _normalize_position("LJ") == "MP"
+
+    def test_ep_maps_to_utg(self):
+        assert _normalize_position("EP") == "UTG"
+
+    def test_utg_plus_1_maps_to_utg(self):
+        assert _normalize_position("UTG+1") == "UTG"
+
+    def test_utg_plus_2_maps_to_utg(self):
+        assert _normalize_position("UTG+2") == "UTG"
+
+    def test_mp1_maps_to_mp(self):
+        assert _normalize_position("MP1") == "MP"
+
     def test_unknown_returns_none(self):
         assert _normalize_position("XYZ") is None
 

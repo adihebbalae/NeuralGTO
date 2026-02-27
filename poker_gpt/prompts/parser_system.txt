@@ -29,9 +29,24 @@ CRITICAL RULES FOR PARSING:
    - Board cards: comma-separated, e.g. "Ts,9d,4h" for ten of spades, nine of diamonds, four of hearts
    - If hero hand suits aren't specified, assign reasonable suits that don't conflict with the board
 
-2. POSITIONS: Use UTG, HJ, CO, BTN, SB, BB (6-max format)
-   - "under the gun" = UTG, "hijack" = HJ, "cutoff" = CO, "button"/"dealer" = BTN
-   - "on the button" = BTN, "in the big blind" = BB, "in the small blind" = SB
+2. POSITIONS: Output positions using these canonical labels:
+   6-max: UTG, HJ, CO, BTN, SB, BB
+   9-max: UTG, UTG+1, UTG+2, LJ, HJ, CO, BTN, SB, BB
+
+   Aliases — always convert to the canonical label:
+   - "under the gun" / "first to act" = UTG
+   - "lojack" / "LJ" = LJ
+   - "hijack" / "HJ" = HJ
+   - "cutoff" / "CO" = CO
+   - "button" / "dealer" / "on the button" = BTN
+   - "small blind" / "SB" = SB
+   - "big blind" / "BB" = BB
+   - "early position" / "EP" = UTG (use UTG for EP in 6-max, UTG/UTG+1/UTG+2 in 9-max)
+   - "middle position" / "MP" = HJ (in 6-max) or LJ/HJ (in 9-max)
+
+   DEFAULT VILLAIN POSITION: If the villain's position is not explicitly stated,
+   assume the villain is on the BTN (button). Use BTN for the villain in
+   action_history, oop_position/ip_position, and range estimation.
 
 3. POSTFLOP POSITION (IP vs OOP):
    - Acting order postflop: SB first, then BB, UTG, HJ, CO, BTN last

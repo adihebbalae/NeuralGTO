@@ -46,15 +46,31 @@ _RANGE_DIR = (
     / "100bb 2.5x 500rake"
 )
 
-# Canonical position order (for mapping HJ → MP, etc.)
+# Canonical position order — maps all 6-max and 9-max aliases to the directory
+# names used in the pre-solved range files (6-max equivalent positions).
+# 9-max order: UTG, UTG+1, UTG+2, LJ, HJ, CO, BTN, SB, BB
+# TexasSolver range dirs use: UTG, MP (= HJ), CO, BTN, SB, BB
 _POSITION_MAP = {
+    # 6-max positions
     "UTG": "UTG",
-    "HJ": "MP",   # TexasSolver calls HJ "MP"
+    "HJ": "MP",    # TexasSolver calls HJ "MP"
     "MP": "MP",
     "CO": "CO",
     "BTN": "BTN",
     "SB": "SB",
     "BB": "BB",
+    # 9-max early position aliases (all map to UTG range — tightest opening range)
+    "UTG+1": "UTG",
+    "UTG+2": "UTG",
+    "EP": "UTG",
+    "EP1": "UTG",
+    "EP2": "UTG",
+    "EP3": "UTG",
+    # 9-max middle position aliases (map to MP = HJ in 6-max)
+    "LJ": "MP",    # Lojack (9-max position between EP and HJ)
+    "MP1": "MP",
+    "MP2": "MP",
+    "MP3": "MP",
 }
 
 # All 169 canonical hands for validation

@@ -13,8 +13,9 @@ from enum import Enum
 
 
 class Position(Enum):
-    """Standard 6-max poker positions."""
+    """Standard poker positions (6-max and 9-max)."""
     UTG = "UTG"       # Under the Gun (first to act preflop)
+    LJ = "LJ"         # Lojack (9-max position between UTG+2 and HJ)
     HJ = "HJ"         # Hijack
     CO = "CO"          # Cutoff
     BTN = "BTN"        # Button (dealer)

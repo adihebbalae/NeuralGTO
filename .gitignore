@@ -24,6 +24,7 @@ venv/
 *.swp
 *.swo
 *.code-workspace
+AGENTS.md
 
 # Internal notes / brainstorm / AI output — not for public repo
 _notes/
@@ -35,6 +36,12 @@ poker_gpt/_work/
 poker_gpt/_cache/
 *.log
 
+# Data cache (PokerBench datasets, etc.)
+_data/
+
+# Root-level work files
+_work/
+
 # Solver binaries (large, downloaded from releases)
 solver_bin/
 
@@ -42,4 +49,5 @@ solver_bin/
 Thumbs.db
 .DS_Store
 desktop.ini
+
 

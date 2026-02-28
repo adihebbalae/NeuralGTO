@@ -38,6 +38,7 @@ def generate_advice(
     strategy: StrategyResult,
     sanity_note: str = "",
     opponent_notes: str = "",
+    spot_frequency_text: str = "",
 ) -> str:
     """
     Generate natural language poker advice from solver strategy.
@@ -51,6 +52,8 @@ def generate_advice(
             station", "aggro maniac", "nit who folds too much"). When provided, the
             advisor will resolve the GTO mixed strategy into a concrete exploitative
             action recommendation.
+        spot_frequency_text: Optional pre-formatted spot frequency data block
+            from spot_frequency.format_spot_frequency_for_advisor().
         
     Returns:
         Natural language advice string.
@@ -59,7 +62,7 @@ def generate_advice(
     system_prompt = _load_advisor_prompt()
     
     # Build the context message with all the data
-    context = _build_context_message(user_input, scenario, strategy, sanity_note, opponent_notes)
+    context = _build_context_message(user_input, scenario, strategy, sanity_note, opponent_notes, spot_frequency_text)
     
     if config.DEBUG:
         print(f"[NL_ADVISOR] Context message:\n{context[:500]}...")
@@ -102,6 +105,7 @@ def _build_context_message(
     strategy: StrategyResult,
     sanity_note: str = "",
     opponent_notes: str = "",
+    spot_frequency_text: str = "",
 ) -> str:
     """Build the user message that includes all context for the advisor."""
     
@@ -136,6 +140,10 @@ RANGE-WIDE STRATEGY (what the entire range does here):
 {range_str}
 
 Data source: {strategy.source}
+
+NOTE TO ADVISOR: If data source is "solver" or "solver_cached", this strategy
+is computed by the TexasSolver CFR engine and is mathematically grounded.
+If data source is "gpt_fallback" or "preflop_lookup", note this in your response.
 """
     if sanity_note:
         msg += f"""
@@ -147,7 +155,37 @@ the extreme frequency and explain why it may be correct or what to watch for.
 {sanity_note}
 """
     if opponent_notes:
-        msg += f"""
+        # Check if this contains pool-level tendencies (live game prep mode)
+        if "[POOL TENDENCIES" in opponent_notes:
+            # Split into individual villain notes and pool notes
+            parts = opponent_notes.split("[POOL TENDENCIES")
+            individual_notes = parts[0].strip()
+            pool_section = "[POOL TENDENCIES" + parts[1] if len(parts) > 1 else ""
+
+            if individual_notes:
+                msg += f"""
+VILLAIN TENDENCY NOTES:
+The user has described the villain as follows. Use this information in your
+"Villain Adjustment" section to recommend a concrete exploitative deviation
+from the GTO baseline. Resolve any mixed strategy into a single action.
+
+  \"{individual_notes}\"
+"""
+            if pool_section:
+                msg += f"""
+POOL TENDENCY NOTES (LIVE GAME PREP MODE):
+The user has described the overall player pool at their table/game. These are
+population-level tendencies — not a specific villain but the typical opponent
+at this game. Use these to recommend a SESSION-WIDE exploitative strategy.
+
+Frame your advice as: "Against this player pool, the solver's GTO baseline
+shifts in the following ways..." Focus on which hands become more/less
+profitable to play and which bet sizes exploit the pool's leaks.
+
+  \"{pool_section}\"
+"""
+        else:
+            msg += f"""
 VILLAIN TENDENCY NOTES:
 The user has described the villain as follows. Use this information in your
 "Villain Adjustment" section to recommend a concrete exploitative deviation
@@ -155,6 +193,9 @@ from the GTO baseline. Resolve any mixed strategy into a single action.
 
   \"{opponent_notes}\"
 """
+    if spot_frequency_text:
+        msg += f"\n{spot_frequency_text}\n"
+
     msg += "\nPlease provide your advice to the user based on this solver analysis.\n"
     return msg
 

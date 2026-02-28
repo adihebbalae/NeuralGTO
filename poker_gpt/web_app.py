@@ -24,7 +24,7 @@ import time
 import re
 import streamlit as st
 
-from poker_gpt.main import analyze_hand
+from poker_gpt.main import analyze_hand, get_source_badge
 from poker_gpt.solver_runner import is_solver_available
 from poker_gpt.cache import get_cache_stats, clear_cache
 from poker_gpt.hand_history import parse_hand_history, hand_to_query, hands_summary
@@ -298,6 +298,23 @@ opponent_notes = st.text_input(
 if opponent_notes != st.session_state.get("opponent_notes", ""):
     st.session_state["opponent_notes"] = opponent_notes
 
+pool_notes = st.text_input(
+    "🎰 Pool tendencies — Live Game Prep (optional):",
+    value=st.session_state.get("pool_notes", ""),
+    placeholder=(
+        "e.g. 'live 1/2, pool underbluffs, rarely value bets thin, "
+        "overcalls preflop, fit-or-fold postflop'"
+    ),
+    help=(
+        "Describe the overall pool tendencies at your game (not a specific villain). "
+        "NeuralGTO will generate session-wide exploitative adjustments — "
+        "e.g., 'against this pool, widen your value betting range and cut bluffs.' "
+        "Great for pre-session prep at live cash games."
+    ),
+)
+if pool_notes != st.session_state.get("pool_notes", ""):
+    st.session_state["pool_notes"] = pool_notes
+
 mode = None
 with col1:
     if st.button("⚡ Fast\n\nLLM-only · ~10s", use_container_width=True):
@@ -430,14 +447,18 @@ See `.streamlit/secrets.toml.example` for the template.
                     text=msg[:80],
                 )
 
+    from poker_gpt.main import _combine_opponent_pool_notes
+
     t0 = time.time()
+
+    combined_notes = _combine_opponent_pool_notes(opponent_notes, pool_notes)
 
     try:
         result = analyze_hand(
             query,
             mode=mode,
             on_status=on_status,
-            opponent_notes=opponent_notes,
+            opponent_notes=combined_notes,
         )
         elapsed = time.time() - t0
 
@@ -521,6 +542,25 @@ See `.streamlit/secrets.toml.example` for the template.
         st.markdown(
             f"**Confidence:** :{conf_color}[{conf_text}]"
         )
+        # Trust badge
+        badge = get_source_badge(result.get("source", "unknown"))
+        if badge:
+            st.markdown(f"**{badge}**")
+
+        # Spot frequency
+        spot_freq = result.get("spot_frequency")
+        if spot_freq:
+            with st.expander(
+                f"📊 Spot Frequency: ~{spot_freq.frequency_pct}% of all hands "
+                f"({spot_freq.priority_label})",
+                expanded=False,
+            ):
+                st.write(spot_freq.note)
+                if spot_freq.similar_spots:
+                    st.write("**Also study:**")
+                    for s in spot_freq.similar_spots[:3]:
+                        st.write(f"• {s}")
+
         st.caption(
             f"Mode: {mode_labels[mode]} · "
             f"Time: {elapsed:.1f}s · "

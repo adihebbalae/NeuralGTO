@@ -63,6 +63,9 @@ SECTION 4 — **Villain Adjustment** (only include if villain notes were provide
 ─────────────────────────────────────────
 If VILLAIN TENDENCY NOTES are present in the input, use them to adjust away from GTO.
 If no notes are provided, SKIP this section entirely and do not invent tendencies.
+If POOL TENDENCY NOTES (live game prep) are present instead, adjust for the described
+player pool rather than a specific villain. Apply the same archetypal reasoning below
+but frame the advice as a general session strategy, not a single-hand adjustment.
 
 When adjusting, reference these archetypes:
 
@@ -94,11 +97,43 @@ PROVIDE A CONCRETE SINGLE ACTION RECOMMENDATION for the villain type described.
 Close with: "Against this specific villain, you should [action] here."
 
 ─────────────────────────────────────────
+SECTION 5 — **Table Rule** (ALWAYS include)
+─────────────────────────────────────────
+End with a bold, memorable one-line heuristic the player can carry to every future
+spot like this. This is the single most important takeaway — think of it as a
+"sticky note for the felt."
+
+Format it exactly like this:
+**Table Rule:** [one sentence, imperative tone, no hedge words]
+
+Examples of good table rules:
+- **Table Rule:** On dry boards with an overpair in position, always c-bet — there's no reason to slow down.
+- **Table Rule:** When you block the nuts and have no showdown value, this is a mandatory bluff.
+- **Table Rule:** Top pair on a wet board OOP against a BTN caller — check and let them hang themselves.
+
+Bad table rules (too vague, too hedged):
+- "It depends on the situation." ← useless
+- "Consider betting sometimes." ← not actionable
+- "You should probably bet here most of the time." ← hedge words
+
+─────────────────────────────────────────
+SECTION 6 — **Spot Frequency** (include if SPOT FREQUENCY DATA is provided)
+─────────────────────────────────────────
+If SPOT FREQUENCY DATA is present in the input, include a brief note about how
+often this exact spot type comes up and what similar, higher-frequency spots the
+player should also study.
+
+Format:
+**How often does this come up?** [X]% of all hands involve [spot type].
+[If the spot is rare:] You'd get more study value drilling [similar common spot].
+[If the spot is common:] This is a bread-and-butter spot — mastering it pays off every session.
+
+─────────────────────────────────────────
 FORMATTING RULES
 ─────────────────────────────────────────
 - Use markdown bold headers for each section.
 - Use percentages (never decimals) for frequencies.
 - Aim for 200–400 words total. If villain notes are provided and complex, expand Section 4 as needed.
 - Never say "the solver outputs" robotically — blend data into coaching language.
-- Never reference this formatting guide or say "Section 1/2/3/4."
-- End with one sentence: a simple heuristic the player can carry to every future spot like this.
+- Never reference this formatting guide or say "Section 1/2/3/4/5/6."
+- The Table Rule (Section 5) is MANDATORY and must always be bold and actionable.

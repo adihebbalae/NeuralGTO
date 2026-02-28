@@ -70,6 +70,11 @@ from poker_gpt.hand_history import (
     hand_to_query,
     hands_summary,
 )
+from poker_gpt.spot_frequency import (
+    get_spot_frequency,
+    format_spot_frequency_for_advisor,
+    SpotFrequencyInfo,
+)
 
 
 # ──────────────────────────────────────────────
@@ -89,6 +94,40 @@ _CONFIDENCE_LABELS = {
     "medium": "Medium \u2014 pre-solved GTO lookup",
     "low": "Low \u2014 LLM approximation",
 }
+
+# ──────────────────────────────────────────────
+# Trust Badge: visible source attribution
+# ──────────────────────────────────────────────
+_SOURCE_BADGES = {
+    "solver": "\u2705 Powered by TexasSolver CFR engine",
+    "solver_cached": "\u2705 Powered by TexasSolver CFR engine (cached)",
+    "preflop_lookup": "\u2705 Based on pre-solved GTO ranges (PioSOLVER data)",
+    "llm_only": "\u26a0\ufe0f LLM approximation \u2014 solver not used for this spot",
+    "llm_fallback": "\u26a0\ufe0f LLM approximation \u2014 solver unavailable",
+    "gpt_fallback": "\u26a0\ufe0f LLM approximation \u2014 solver unavailable",
+    "validation_error": "",
+}
+
+
+def get_source_badge(source: str) -> str:
+    """Return the trust badge string for a given source."""
+    return _SOURCE_BADGES.get(source, "")
+
+
+def _combine_opponent_pool_notes(opponent_notes: str, pool_notes: str) -> str:
+    """Combine per-villain and pool-level tendency notes for the advisor.
+
+    When both are provided, the advisor sees both sections so it can layer
+    individual villain reads on top of population-level exploits.
+    """
+    parts: list[str] = []
+    if opponent_notes:
+        parts.append(opponent_notes)
+    if pool_notes:
+        parts.append(
+            f"[POOL TENDENCIES — Live game prep] {pool_notes}"
+        )
+    return "\n\n".join(parts)
 
 
 def analyze_hand(
@@ -145,6 +184,7 @@ def analyze_hand(
             "source": "validation_error",
             "confidence": "low",
             "parse_time": 0.0,
+            "spot_frequency": None,
         }
 
     # ── Step 1: Parse natural language → structured scenario ──
@@ -174,10 +214,21 @@ def analyze_hand(
             "source": "validation_error",
             "confidence": "low",
             "parse_time": parse_time,
+            "spot_frequency": None,
         }
 
     # ── Check if we should use the solver ──
     use_solver = preset.get("use_solver", True) and config.USE_SOLVER and is_solver_available()
+
+    # ── Compute spot frequency data (for all paths) ──
+    spot_freq_info: Optional[SpotFrequencyInfo] = None
+    spot_freq_text = ""
+    try:
+        spot_freq_info = get_spot_frequency(scenario)
+        spot_freq_text = format_spot_frequency_for_advisor(spot_freq_info)
+    except Exception as e:
+        if config.DEBUG:
+            _status(f"  Spot frequency lookup error (non-fatal): {e}")
 
     # ── Step 1.5: Preflop lookup (pre-solved GTO ranges) ──
     # If this is a preflop scenario, try the instant lookup before falling back
@@ -204,6 +255,7 @@ def analyze_hand(
             advice = generate_advice(
                 query, scenario, preflop_strategy,
                 opponent_notes=opponent_notes,
+                spot_frequency_text=spot_freq_text,
             )
             _status(f"  \u2713 Generated in {time.time()-t_adv:.1f}s")
             source = "preflop_lookup"
@@ -218,6 +270,7 @@ def analyze_hand(
                 "source": source,
                 "confidence": _CONFIDENCE_MAP.get(source, "low"),
                 "parse_time": parse_time,
+                "spot_frequency": spot_freq_info,
             }
         else:
             _status("  No exact preflop match — falling back to LLM mode")
@@ -240,6 +293,7 @@ def analyze_hand(
             "source": source,
             "confidence": _CONFIDENCE_MAP.get(source, "low"),
             "parse_time": parse_time,
+            "spot_frequency": spot_freq_info,
         }
 
     # ── Step 2: Generate solver input file (with mode-specific settings) ──
@@ -286,6 +340,7 @@ def analyze_hand(
                 "source": source,
                 "confidence": _CONFIDENCE_MAP.get(source, "low"),
                 "parse_time": parse_time,
+                "spot_frequency": spot_freq_info,
             }
 
         if output_file is None:
@@ -303,6 +358,7 @@ def analyze_hand(
                 "source": source,
                 "confidence": _CONFIDENCE_MAP.get(source, "low"),
                 "parse_time": parse_time,
+                "spot_frequency": spot_freq_info,
             }
 
         solve_time = time.time() - t2
@@ -337,6 +393,7 @@ def analyze_hand(
             "source": source,
             "confidence": _CONFIDENCE_MAP.get(source, "low"),
             "parse_time": parse_time,
+            "spot_frequency": spot_freq_info,
         }
 
     # ── Step 4.5: Sanity check extreme frequencies ──
@@ -359,6 +416,7 @@ def analyze_hand(
         query, scenario, strategy,
         sanity_note=sanity_note,
         opponent_notes=opponent_notes,
+        spot_frequency_text=spot_freq_text,
     )
     _status(f"  ✓ Generated in {time.time()-t4:.1f}s")
 
@@ -374,6 +432,7 @@ def analyze_hand(
         "source": source,
         "confidence": _CONFIDENCE_MAP.get(source, "low"),
         "parse_time": parse_time,
+        "spot_frequency": spot_freq_info,
     }
 
 
@@ -415,7 +474,7 @@ def run_pipeline(
     return result
 
 
-def _display_result(result: dict, opponent_notes: str = "") -> None:
+def _display_result(result: dict, opponent_notes: str = "", pool_notes: str = "") -> None:
     """
     Display analysis results with rich formatting (tables, colors).
     Falls back to plain text if rich is unavailable.
@@ -447,8 +506,24 @@ def _display_result(result: dict, opponent_notes: str = "") -> None:
 
         print(advice)
         print(f"\n[Confidence: {confidence_label}]")
+        badge = get_source_badge(source)
+        if badge:
+            print(badge)
         if opponent_notes:
             print(f'[Villain profile: "{opponent_notes}"]')
+        if pool_notes:
+            print(f'[Pool tendencies: "{pool_notes}"]')
+
+        # Spot frequency
+        spot_freq = result.get("spot_frequency")
+        if spot_freq:
+            print(f"\n📊 Spot Frequency: ~{spot_freq.frequency_pct}% of all hands")
+            print(f"   {spot_freq.priority_label}")
+            if spot_freq.similar_spots:
+                print("   Also study:")
+                for s in spot_freq.similar_spots[:3]:
+                    print(f"     • {s}")
+
         print(f"{'─' * 50}")
         return
 
@@ -499,7 +574,159 @@ def _display_result(result: dict, opponent_notes: str = "") -> None:
 
     if opponent_notes:
         console.print(f'\n[dim]Villain profile: "{opponent_notes}"[/dim]')
+    if pool_notes:
+        console.print(f'\n[dim]Pool tendencies: "{pool_notes}"[/dim]')
+
+    # Trust badge
+    badge = get_source_badge(source)
+    if badge:
+        console.print(f"\n[bold]{badge}[/bold]")
+
+    # Spot frequency
+    spot_freq = result.get("spot_frequency")
+    if spot_freq:
+        console.print()
+        freq_parts = [
+            f"[bold]📊 Spot Frequency:[/bold] ~{spot_freq.frequency_pct}% of all hands",
+            f"   {spot_freq.priority_label}",
+        ]
+        console.print("\n".join(freq_parts))
+        if spot_freq.similar_spots:
+            console.print("   [dim]Also study:[/dim]")
+            for s in spot_freq.similar_spots[:3]:
+                console.print(f"   [dim]• {s}[/dim]")
+
     console.rule()
+
+
+# ──────────────────────────────────────────────
+# Conversational Gap-Filling
+# ──────────────────────────────────────────────
+
+# Default assumptions when user doesn't specify
+_DEFAULTS = {
+    "effective_stack": "100bb",
+    "game_type": "6-max cash",
+    "pot_size": "estimated from action",
+}
+
+# Patterns to detect what's already specified
+import re as _re
+
+_HAS_STACK = _re.compile(
+    r"\b(\d+)\s*bb\b|\beffective|\bstack|\bdeep\b|\bshort\b", _re.IGNORECASE
+)
+_HAS_POSITION = _re.compile(
+    r"\b(?:button|btn|cutoff|cut-off|co|under\s*the\s*gun|utg|hijack|hj|"
+    r"lojack|lj|small\s*blind|sb|big\s*blind|bb|mp|ep|lp|straddle)\b",
+    _re.IGNORECASE,
+)
+_HAS_HAND = _re.compile(
+    r"(?:pocket\s+\w+)|(?:pair\s+of\s+\w+)|"
+    r"(?:[2-9TJQKA][hdcs]\s*[2-9TJQKA][hdcs])|"
+    r"(?:[2-9TJQKA]{2}[so]?)|"
+    r"(?:aces|kings|queens|jacks|tens|nines|eights|sevens|sixes)|"
+    r"(?:ace[- ]king|king[- ]queen)|(?:big\s+slick)|"
+    r"(?:rockets|cowboys|ladies|hooks|ducks)",
+    _re.IGNORECASE,
+)
+_HAS_ACTION = _re.compile(
+    r"\b(?:raise[sd]?|3bet|3-bet|4bet|open[sd]?|limp[sd]?|call[sd]?|check[sd]?|"
+    r"bet[sd]?|fold[sd]?|jam[sd]?|shove[sd]?|all-?in)\b",
+    _re.IGNORECASE,
+)
+_HAS_BOARD = _re.compile(
+    r"\b(?:flop|turn|river|board)\b|"
+    r"(?:[2-9TJQKA][hdcs]\s+[2-9TJQKA][hdcs]\s+[2-9TJQKA][hdcs])",
+    _re.IGNORECASE,
+)
+
+
+def _fill_gaps_interactive(query: str) -> Optional[str]:
+    """
+    Check a query for missing details and prompt the user interactively.
+
+    If the query is missing key information (hand, position, stack depth,
+    action context), ask the user to provide it. The user can press Enter
+    to accept the default. Returns the enriched query, or None if cancelled.
+
+    Args:
+        query: The user's original natural-language poker question.
+
+    Returns:
+        An enriched query string, or None if the user cancels.
+    """
+    gaps: list[tuple[str, str, str]] = []  # (field, prompt_text, default)
+
+    if not _HAS_HAND.search(query):
+        gaps.append((
+            "hand",
+            "What are your hole cards? (e.g. AKs, QQ, Jd Td)",
+            "",
+        ))
+
+    if not _HAS_POSITION.search(query):
+        gaps.append((
+            "position",
+            "What position are you in? (UTG / HJ / CO / BTN / SB / BB)",
+            "",
+        ))
+
+    if not _HAS_ACTION.search(query):
+        gaps.append((
+            "action",
+            "What's the action so far? (e.g. 'UTG raises to 3bb, I call')",
+            "",
+        ))
+
+    if not _HAS_STACK.search(query):
+        gaps.append((
+            "stack",
+            f"Effective stack depth? [default: {_DEFAULTS['effective_stack']}]",
+            _DEFAULTS["effective_stack"],
+        ))
+
+    if not gaps:
+        return query  # Query looks complete
+
+    # Print summary of what's missing
+    print("\n  I'd like a few more details for a better analysis:")
+    additions: list[str] = []
+
+    for field, prompt_text, default in gaps:
+        try:
+            answer = input(f"  → {prompt_text}: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
+        if not answer and default:
+            answer = default
+            print(f"    (using default: {default})")
+        elif not answer and not default:
+            # Required field with no default — can't proceed without hand/position
+            if field in ("hand", "position"):
+                print(f"    This is required. Please try again with your full hand.")
+                return None
+            continue  # Skip optional field
+
+        # Append the clarification to the query naturally
+        if field == "hand":
+            additions.append(f"I have {answer}")
+        elif field == "position":
+            additions.append(f"on the {answer}")
+        elif field == "action":
+            additions.append(answer)
+        elif field == "stack":
+            additions.append(f"{answer} effective")
+
+    # Build enriched query
+    if additions:
+        enriched = query.rstrip(". ") + ". " + ". ".join(additions) + "."
+        print(f"\n  → Enriched query: \"{enriched}\"\n")
+        return enriched
+
+    return query
 
 
 def interactive_mode(
@@ -533,11 +760,14 @@ def interactive_mode(
     print("Type 'mode fast/default/pro' to change mode.")
     print("Type 'opponent <description>' to set villain tendencies (e.g. 'opponent calling station').")
     print("Type 'opponent clear' to remove villain tendencies.")
+    print("Type 'pool <description>' to set live game pool tendencies for session prep.")
+    print("Type 'pool clear' to remove pool tendencies.")
     print("Type 'history' to see your recent queries.")
     print("Type 'import <filepath>' to import a hand history file.\n")
     
     current_mode = default_mode
     current_opponent_notes = default_opponent_notes
+    current_pool_notes = ""
     
     while True:
         try:
@@ -573,7 +803,18 @@ def interactive_mode(
                 print(f"  → Villain profile set: \"{current_opponent_notes}\"")
                 print("  Advice will now include exploitative adjustments for this villain.")
             continue
-        
+        # Pool tendency setting (live game prep mode)
+        if user_input.lower().startswith("pool "):
+            notes = user_input.split(" ", 1)[1].strip()
+            if notes.lower() == "clear":
+                current_pool_notes = ""
+                print("  \u2192 Pool profile cleared. Advice will be pure GTO.")
+            else:
+                current_pool_notes = notes
+                print(f"  \u2192 Pool tendencies set: \"{current_pool_notes}\"")
+                print("  All future advice will include pool-exploitative adjustments.")
+                print("  (Use 'pool clear' to reset to pure GTO.)")
+            continue        
         # History command
         if user_input.lower() in ("history", "hist"):
             entries = get_history(limit=10)
@@ -602,12 +843,25 @@ def interactive_mode(
             continue
 
         try:
+            # ── Conversational gap-filling ──
+            # Before running the pipeline, check for missing info and prompt
+            user_input = _fill_gaps_interactive(user_input)
+            if user_input is None:
+                # User cancelled during gap-filling
+                continue
+
             result = run_pipeline(
                 user_input,
                 mode=current_mode,
-                opponent_notes=current_opponent_notes,
+                opponent_notes=_combine_opponent_pool_notes(
+                    current_opponent_notes, current_pool_notes
+                ),
             )
-            _display_result(result, opponent_notes=current_opponent_notes)
+            _display_result(
+                result,
+                opponent_notes=current_opponent_notes,
+                pool_notes=current_pool_notes,
+            )
             log_query(result, user_input, opponent_notes=current_opponent_notes)
         except Exception as e:
             print(f"\n❌ Error: {e}")
@@ -695,6 +949,7 @@ Examples:
   python -m poker_gpt.main --no-solver --debug
   python -m poker_gpt.main --opponent "calling station, never folds" --query "I have QQ on BTN..."
   python -m poker_gpt.main --opponent "aggressive, raises every street" --query "..."
+  python -m poker_gpt.main --pool "live 1/2, pool underbluffs, rarely value bets thin" --query "..."
         """,
     )
     parser.add_argument(
@@ -783,6 +1038,8 @@ Examples:
         mode = "fast"
     
     opponent_notes = args.opponent or ""
+    pool_notes = args.pool or ""
+    combined_notes = _combine_opponent_pool_notes(opponent_notes, pool_notes)
 
     if args.import_hh:
         # Hand history import mode
@@ -790,13 +1047,13 @@ Examples:
             args.import_hh,
             hero_name=args.hero_name,
             mode=mode,
-            opponent_notes=opponent_notes,
+            opponent_notes=combined_notes,
         )
     elif args.query:
         # Single query mode
-        result = run_pipeline(args.query, mode=mode, opponent_notes=opponent_notes)
-        _display_result(result, opponent_notes=opponent_notes)
-        log_query(result, args.query, opponent_notes=opponent_notes)
+        result = run_pipeline(args.query, mode=mode, opponent_notes=combined_notes)
+        _display_result(result, opponent_notes=opponent_notes, pool_notes=pool_notes)
+        log_query(result, args.query, opponent_notes=combined_notes)
     else:
         # Interactive mode
         interactive_mode(default_mode=mode, default_opponent_notes=opponent_notes)

@@ -236,6 +236,9 @@ _ACTION_RE = re.compile(
 # Available bet sizes in our pre-solved range tree
 _TREE_SIZES = [2.5, 3.0, 8.5, 9.0, 11.0, 13.0, 20.0, 21.0, 22.0, 24.0, 25.0]
 
+# Out-of-position positions for context-aware sizing
+_OOP_POSITIONS = {"SB", "BB"}
+
 
 def _snap_to_tree_size(amount_bb: float, is_sb_open: bool = False) -> float:
     """Map a PokerBench raise size to the nearest size in our tree.
@@ -250,6 +253,81 @@ def _snap_to_tree_size(amount_bb: float, is_sb_open: bool = False) -> float:
     if is_sb_open:
         return 3.0
     return min(_TREE_SIZES, key=lambda s: abs(s - amount_bb))
+
+
+def _context_snap_size(
+    raw_amount: float,
+    raiser_pos: str,
+    raise_number: int,
+    had_callers_before: bool,
+    opener_pos: str | None,
+    prev_raise_size: float | None,
+) -> float:
+    """Map a raise amount to the correct tree size for its game-tree context.
+
+    Our pre-solved range tree uses specific sizes at each decision point.
+    Global nearest-neighbor snapping fails because the same amount means
+    different things in different contexts (e.g. 9.0 is a BB 3-bet vs SB
+    open, but SB 3-bet vs any other open is 11.0).
+
+    Tree sizing conventions (from file analysis):
+        Open (non-SB):        2.5bb
+        SB open:              3.0bb
+        IP 3-bet (BTN/CO/MP): 8.5bb
+        OOP 3-bet (SB/BB):    11.0bb (vs non-SB), 9.0bb (BB vs SB)
+        Squeeze (after call):  13.0bb
+        4-bet (vs IP 3-bet):   22.0bb
+        4-bet (vs OOP 3-bet):  24.0bb
+        Cold 4-bet (non-SB):   20.0bb
+        Cold 4-bet (SB):       21.0bb
+        5-bet / after squeeze: 25.0bb
+
+    Args:
+        raw_amount: PokerBench raise amount in bb.
+        raiser_pos: Position of the raiser (PB format, e.g. "HJ").
+        raise_number: 1=open, 2=3-bet, 3=4-bet, 4+=5-bet.
+        had_callers_before: True if someone called between last raise
+            and this one (squeeze indicator).
+        opener_pos: Position of the original opener (for 4-bet context).
+        prev_raise_size: Size of the previous raise (to distinguish
+            4-bet vs IP 3-bet from 4-bet vs OOP 3-bet).
+
+    Returns:
+        The tree size for this action context.
+    """
+    pos = raiser_pos.upper()
+
+    # --- Open ---
+    if raise_number == 1:
+        return 3.0 if pos == "SB" else 2.5
+
+    # --- 3-bet (or squeeze) ---
+    if raise_number == 2:
+        if had_callers_before:
+            return 13.0  # squeeze
+        if pos in _OOP_POSITIONS:
+            if opener_pos and opener_pos.upper() == "SB":
+                return 9.0  # BB 3-bet vs SB open
+            return 11.0  # OOP 3-bet vs non-SB
+        return 8.5  # IP 3-bet
+
+    # --- 4-bet ---
+    if raise_number == 3:
+        if had_callers_before:
+            return 25.0  # 4-bet squeeze (rare, into multiway)
+        # Original opener re-raising (regular 4-bet)
+        if opener_pos and pos.upper() == opener_pos.upper():
+            # 4-bet by opener: size depends on 3-bet sizing
+            if prev_raise_size is not None and prev_raise_size <= 9.0:
+                return 22.0  # vs IP / small 3-bet
+            return 24.0  # vs OOP 3-bet (11.0bb)
+        # Cold 4-bet by a different player
+        if pos == "SB":
+            return 21.0
+        return 20.0
+
+    # --- 5-bet+ ---
+    return 25.0
 
 
 def _holding_nl_to_cards(nl_holding: str) -> str | None:
@@ -312,7 +390,11 @@ def _parse_pb_preflop_actions(instruction: str, hero_pos: str) -> list[ActionEnt
         return []
 
     entries: list[ActionEntry] = []
-    is_first_raise = True  # Track whether this is the first raise (= open)
+    raise_count = 0          # 0=none, 1=open, 2=3bet, 3=4bet, ...
+    callers_since_raise = 0  # callers since the last raise (squeeze detector)
+    opener_pos: str | None = None   # who made the original open
+    prev_raise_size: float | None = None  # size of last raise
+
     for match in _ACTION_RE.finditer(action_text):
         pos = match.group(1).upper()
         action_raw = match.group(2).lower().replace(" ", "")
@@ -333,14 +415,23 @@ def _parse_pb_preflop_actions(instruction: str, hero_pos: str) -> list[ActionEnt
             action = action_raw
 
         amount_bb = None
-        if amount_str:
+        if action == "raise" and amount_str:
             raw_amount = float(amount_str)
-            # Snap to nearest tree size
-            is_sb_open = (pos == "SB" and is_first_raise and action == "raise")
-            amount_bb = _snap_to_tree_size(raw_amount, is_sb_open=is_sb_open)
-
-        if action == "raise":
-            is_first_raise = False
+            raise_count += 1
+            amount_bb = _context_snap_size(
+                raw_amount,
+                raiser_pos=pos,
+                raise_number=raise_count,
+                had_callers_before=callers_since_raise > 0,
+                opener_pos=opener_pos,
+                prev_raise_size=prev_raise_size,
+            )
+            if raise_count == 1:
+                opener_pos = pos
+            prev_raise_size = amount_bb
+            callers_since_raise = 0
+        elif action == "call":
+            callers_since_raise += 1
 
         entries.append(ActionEntry(
             position=pos,

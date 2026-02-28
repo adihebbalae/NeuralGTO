@@ -23,6 +23,7 @@ from poker_gpt.evaluation.evaluator import (
     _holding_nl_to_cards,
     _parse_pb_preflop_actions,
     _snap_to_tree_size,
+    _context_snap_size,
     _pb_to_scenario,
 )
 
@@ -306,7 +307,7 @@ class TestHoldingNlToCards:
 # ---------------------------------------------------------------------------
 
 class TestSnapToTreeSize:
-    """Tests for _snap_to_tree_size."""
+    """Tests for _snap_to_tree_size (global fallback)."""
 
     def test_exact_match(self):
         assert _snap_to_tree_size(2.5) == 2.5
@@ -328,6 +329,56 @@ class TestSnapToTreeSize:
     def test_4bet_24_3(self):
         result = _snap_to_tree_size(24.3)
         assert result == 24.0
+
+
+class TestContextSnapSize:
+    """Tests for _context_snap_size (context-aware sizing)."""
+
+    def test_open_non_sb(self):
+        assert _context_snap_size(2.0, "HJ", 1, False, None, None) == 2.5
+
+    def test_open_sb(self):
+        assert _context_snap_size(2.5, "SB", 1, False, None, None) == 3.0
+
+    def test_3bet_ip(self):
+        # BTN 3-bets vs any open → 8.5
+        assert _context_snap_size(9.0, "BTN", 2, False, "HJ", 2.5) == 8.5
+
+    def test_3bet_oop_sb(self):
+        # SB 3-bets vs BTN open → 11.0 (not 9.0)
+        assert _context_snap_size(9.0, "SB", 2, False, "BTN", 2.5) == 11.0
+
+    def test_3bet_oop_bb_vs_non_sb(self):
+        # BB 3-bets vs CO open → 11.0 (not 13.0)
+        assert _context_snap_size(13.0, "BB", 2, False, "CO", 2.5) == 11.0
+
+    def test_3bet_bb_vs_sb(self):
+        # BB 3-bets vs SB open → 9.0
+        assert _context_snap_size(8.0, "BB", 2, False, "SB", 3.0) == 9.0
+
+    def test_squeeze(self):
+        # BB raises after open + call → 13.0
+        assert _context_snap_size(12.0, "BB", 2, True, "CO", 2.5) == 13.0
+
+    def test_4bet_vs_ip_3bet(self):
+        # Opener (UTG) re-raises IP 3-bet (8.5) → 22.0
+        assert _context_snap_size(20.0, "UTG", 3, False, "UTG", 8.5) == 22.0
+
+    def test_4bet_vs_oop_3bet(self):
+        # Opener (BTN) re-raises OOP 3-bet (11.0) → 24.0
+        assert _context_snap_size(22.0, "BTN", 3, False, "BTN", 11.0) == 24.0
+
+    def test_cold_4bet_non_sb(self):
+        # CO cold 4-bets (not the opener) → 20.0
+        assert _context_snap_size(13.0, "CO", 3, False, "UTG", 8.5) == 20.0
+
+    def test_cold_4bet_sb(self):
+        # SB cold 4-bets → 21.0
+        assert _context_snap_size(20.0, "SB", 3, False, "UTG", 8.5) == 21.0
+
+    def test_5bet(self):
+        # 5-bet → always 25.0
+        assert _context_snap_size(30.0, "BB", 4, False, "CO", 22.0) == 25.0
 
 
 # ---------------------------------------------------------------------------
@@ -356,11 +407,13 @@ class TestParsePbPreflopActions:
         entries = _parse_pb_preflop_actions(inst, "HJ")
         assert len(entries) == 4
         assert entries[0].position == "HJ"
+        assert entries[0].amount_bb == 2.5  # open snapped
         assert entries[1].position == "CO"
         assert entries[1].action == "call"
         assert entries[2].position == "SB"
         assert entries[3].position == "BB"
         assert entries[3].action == "raise"
+        assert entries[3].amount_bb == 13.0  # squeeze (callers before)
 
     def test_allin(self):
         inst = "Before the flop, SB all in. Assume that all others folded."

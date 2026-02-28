@@ -14,6 +14,22 @@ Read these files in order before doing any work:
 
 At session end: append an entry to `_dev/CAPTAINS_LOG.md` (write-only audit trail — do not read during planning).
 
+## Orchestrator System (HMAS)
+
+Three specialized agent modes live in `.github/`. Route work to them based on intent:
+
+| Intent | Agent File | Use When |
+|--------|-----------|----------|
+| **Planning** | `.github/PLANNER.agent.md` | "What should I work on?", "What's next?", start of session |
+| **Research** | `.github/RESEARCH_ORCHESTRATOR.agent.md` | Wave 4 tasks, benchmarks, eval methodology, paper writing |
+| **Product** | `.github/MVP_ORCHESTRATOR.agent.md` | Wave 1–3 tasks, shipping features, UI, bug fixes |
+
+**Workflow:**
+- Open a planning chat → use `PLANNER.agent.md` context first → get a day plan with explicit routes
+- Open separate task chats → attach the relevant orchestrator file → execute the specific task
+
+Tasks can be parallelized across chats. The Planner decides which ones.
+
 ## Hard Rules
 - **Never commit** `.github/`, `_priv/`, `_dev/`, `_notes/`, `solver_bin/`, `.env`
 - Run `git status` before every commit; unstage any of the above immediately if staged

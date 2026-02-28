@@ -48,6 +48,12 @@ from poker_gpt.evaluation.pokerbench import (
 )
 from poker_gpt.poker_types import ScenarioData, ActionEntry
 from poker_gpt.preflop_lookup import lookup_preflop_strategy, is_preflop_lookup_available
+from poker_gpt.multiway import (
+    analyze_multiway,
+    identify_active_opponents,
+    is_multiway,
+    MultiwayResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -751,11 +757,16 @@ def _aggregate(
 # ---------------------------------------------------------------------------
 
 def run_evaluation(
-    mode: Literal["gemini_direct", "neuralgto_fast", "neuralgto_lookup"] = "neuralgto_lookup",
+    mode: Literal[
+        "gemini_direct", "neuralgto_fast", "neuralgto_lookup",
+        "neuralgto_pairwise",
+    ] = "neuralgto_lookup",
     split: Literal["preflop", "postflop", "all"] = "preflop",
     limit: int | None = None,
     progress_callback: callable | None = None,
     save_results: bool = True,
+    multiway_only: bool = False,
+    use_llm_synthesis: bool = True,
 ) -> EvalReport:
     """Run PokerBench evaluation.
 
@@ -767,11 +778,17 @@ def run_evaluation(
             "neuralgto_lookup" — Preflop lookup tables (offline, instant).
             "gemini_direct" — Vanilla Gemini (LLM baseline for paper).
             "neuralgto_fast" — Enhanced poker-theory prompting.
+            "neuralgto_pairwise" — Pairwise HU decomposition + LLM synthesis
+                (multi-way scenarios only, requires Gemini API).
         split: Dataset split to evaluate.
         limit: Max scenarios to evaluate (for quick tests).
         progress_callback: Optional callable(current, total, result) for
             progress updates.
         save_results: Whether to save results JSON to _data/pokerbench/.
+        multiway_only: When True, only evaluate scenarios with 2+ active
+            opponents. Used with "neuralgto_pairwise" mode.
+        use_llm_synthesis: Whether to use Gemini for multi-way synthesis.
+            If False, uses heuristic-only fallback (no API calls).
 
     Returns:
         EvalReport with all metrics.
@@ -779,6 +796,19 @@ def run_evaluation(
     logger.info("Loading PokerBench %s test set...", split)
     scenarios = load_test_set(split, limit=limit)
     logger.info("Loaded %d scenarios", len(scenarios))
+
+    # ---- neuralgto_pairwise: multi-way decomposition ----
+    if mode == "neuralgto_pairwise":
+        if not is_preflop_lookup_available():
+            raise RuntimeError(
+                "Preflop lookup tables not found. Ensure solver_bin/ "
+                "contains the Pio range files."
+            )
+        return _run_pairwise_evaluation(
+            scenarios, split, progress_callback, save_results,
+            multiway_only=multiway_only,
+            use_llm=use_llm_synthesis,
+        )
 
     # ---- neuralgto_lookup: offline, no API key needed ----
     if mode == "neuralgto_lookup":
@@ -896,6 +926,153 @@ def _run_lookup_evaluation(
         1 for r in results
         if r.correct
         and not r.predicted_raw.startswith(no_match_marker)
+        and not r.predicted_raw.startswith(parse_error_marker)
+        and not r.error
+    )
+    report.matched_accuracy = (
+        matched_correct / max(report.matched, 1)
+    )
+
+    if save_results:
+        _save_report(report)
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Pairwise multi-way evaluation
+# ---------------------------------------------------------------------------
+
+def _is_pb_multiway(scenario: PBScenario) -> bool:
+    """Check if a PokerBench scenario is multi-way (2+ active opponents).
+
+    Uses the same parsing logic as the evaluator's action parsing to
+    identify active opponents at hero's decision point.
+
+    Args:
+        scenario: PokerBench scenario to check.
+
+    Returns:
+        True if hero faces 2+ opponents.
+    """
+    sd = _pb_to_scenario(scenario)
+    if sd is None:
+        return False
+    opponents = identify_active_opponents(sd)
+    return len(opponents) >= 2
+
+
+def _predict_neuralgto_pairwise(
+    scenario: PBScenario,
+    use_llm: bool = True,
+) -> tuple[str, str]:
+    """Get NeuralGTO pairwise decomposition prediction.
+
+    Converts PBScenario → ScenarioData → pairwise analysis.
+
+    Args:
+        scenario: The PokerBench scenario.
+        use_llm: Whether to use LLM for synthesis.
+
+    Returns:
+        Tuple of (action_category, raw_description).
+    """
+    sd = _pb_to_scenario(scenario)
+    if sd is None:
+        return ("unknown", "[parse error: could not convert scenario]")
+
+    mw_result = analyze_multiway(sd, use_llm=use_llm)
+
+    if not mw_result.action:
+        return ("unknown", "[pairwise: no action produced]")
+
+    action = mw_result.action.lower().strip()
+    # Normalize to PokerBench categories
+    if action in ("raise", "bet"):
+        return ("raise", f"raise ({mw_result.reasoning})")
+    elif action in ("call", "fold", "check"):
+        return (action, f"{action} ({mw_result.reasoning})")
+    else:
+        return (action, mw_result.raw_text)
+
+
+def _run_pairwise_evaluation(
+    scenarios: list[PBScenario],
+    split: str,
+    progress_callback: callable | None,
+    save_results: bool,
+    multiway_only: bool = True,
+    use_llm: bool = True,
+) -> EvalReport:
+    """Run pairwise decomposition evaluation.
+
+    Filters for multi-way scenarios and evaluates using pairwise HU
+    decomposition + LLM synthesis.
+
+    Args:
+        scenarios: PokerBench scenarios to evaluate.
+        split: Dataset split name.
+        progress_callback: Optional progress callback.
+        save_results: Whether to save results JSON.
+        multiway_only: If True, skip non-multi-way scenarios.
+        use_llm: Whether to use LLM for synthesis.
+
+    Returns:
+        EvalReport with all metrics plus coverage stats.
+    """
+    # Filter for multi-way if requested
+    if multiway_only:
+        filtered = [s for s in scenarios if _is_pb_multiway(s)]
+        logger.info(
+            "Filtered %d → %d multi-way scenarios",
+            len(scenarios), len(filtered),
+        )
+        scenarios = filtered
+
+    results: list[EvalResult] = []
+    start_time = time.time()
+
+    for i, scenario in enumerate(scenarios):
+        t0 = time.time()
+        result = EvalResult(scenario=scenario)
+
+        try:
+            action_cat, raw = _predict_neuralgto_pairwise(
+                scenario, use_llm=use_llm,
+            )
+            result.predicted_action = action_cat
+            result.predicted_raw = raw
+            result.correct = action_matches(raw, scenario.ground_truth)
+        except Exception as e:
+            result.error = str(e)
+            logger.warning("Error on scenario %d: %s", i, e)
+
+        result.latency_s = time.time() - t0
+        results.append(result)
+
+        if progress_callback:
+            progress_callback(i + 1, len(scenarios), result)
+
+        # Rate limiting if using LLM synthesis
+        if use_llm and i < len(scenarios) - 1:
+            time.sleep(0.3)
+
+    total_time = time.time() - start_time
+    report = _aggregate(results, "neuralgto_pairwise", split, total_time)
+
+    # Coverage stats for pairwise mode
+    pairwise_marker = "[pairwise: no action produced]"
+    parse_error_marker = "[parse error"
+    report.no_match = sum(
+        1 for r in results
+        if r.predicted_raw.startswith(pairwise_marker)
+        or r.predicted_raw.startswith(parse_error_marker)
+    )
+    report.matched = report.total - report.no_match - report.errors
+    matched_correct = sum(
+        1 for r in results
+        if r.correct
+        and not r.predicted_raw.startswith(pairwise_marker)
         and not r.predicted_raw.startswith(parse_error_marker)
         and not r.error
     )

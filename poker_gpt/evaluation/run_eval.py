@@ -44,9 +44,9 @@ Examples:
     )
     parser.add_argument(
         "--mode",
-        choices=["gemini_direct", "neuralgto_fast"],
-        default="gemini_direct",
-        help="Evaluation mode (default: gemini_direct)",
+        choices=["gemini_direct", "neuralgto_fast", "neuralgto_lookup"],
+        default="neuralgto_lookup",
+        help="Evaluation mode (default: neuralgto_lookup)",
     )
     parser.add_argument(
         "--split",
@@ -93,7 +93,7 @@ Examples:
     from poker_gpt.evaluation.evaluator import run_evaluation
 
     def progress(current: int, total: int, result) -> None:
-        status = "✓" if result.correct else ("✗" if not result.error else "!")
+        status = "Y" if result.correct else ("X" if not result.error else "!")
         pred = result.predicted_raw[:20] if result.predicted_raw else "ERROR"
         truth = result.scenario.ground_truth
         print(

@@ -46,6 +46,8 @@ from poker_gpt.evaluation.pokerbench import (
     action_matches,
     load_test_set,
 )
+from poker_gpt.poker_types import ScenarioData, ActionEntry
+from poker_gpt.preflop_lookup import lookup_preflop_strategy, is_preflop_lookup_available
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +108,10 @@ class EvalReport:
     confusion: dict[str, dict[str, int]] = field(default_factory=dict)
     total_time_s: float = 0.0
     mean_latency_s: float = 0.0
+    # Coverage metrics (for lookup mode)
+    matched: int = 0       # Scenarios where lookup found a match
+    no_match: int = 0      # Scenarios where lookup had no matching entry
+    matched_accuracy: float = 0.0  # Accuracy on matched scenarios only
 
     def summary(self) -> str:
         """Return a human-readable summary of the evaluation."""
@@ -116,11 +122,27 @@ class EvalReport:
             f"Total: {self.total}  Correct: {self.correct}  "
             f"Errors: {self.errors}",
             f"Accuracy: {self.accuracy:.1%}",
+        ]
+        if self.matched > 0 or self.no_match > 0:
+            lines.append("")
+            lines.append("--- Coverage ---")
+            lines.append(
+                f"  Matched:   {self.matched}/{self.total} "
+                f"= {self.matched / max(self.total, 1):.1%}"
+            )
+            lines.append(
+                f"  No match:  {self.no_match}/{self.total} "
+                f"= {self.no_match / max(self.total, 1):.1%}"
+            )
+            lines.append(
+                f"  Accuracy on matched: {self.matched_accuracy:.1%}"
+            )
+        lines.extend([
             f"Time: {self.total_time_s:.1f}s  "
             f"Mean latency: {self.mean_latency_s:.2f}s",
             "",
             "--- By Street ---",
-        ]
+        ])
         for street, stats in sorted(self.by_street.items()):
             lines.append(
                 f"  {street:10s}: {stats['correct']}/{stats['total']} "
@@ -157,7 +179,7 @@ class EvalReport:
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-safe dict (excludes individual results)."""
-        return {
+        d = {
             "mode": self.mode,
             "split": self.split,
             "total": self.total,
@@ -171,6 +193,241 @@ class EvalReport:
             "total_time_s": self.total_time_s,
             "mean_latency_s": self.mean_latency_s,
         }
+        if self.matched > 0 or self.no_match > 0:
+            d["matched"] = self.matched
+            d["no_match"] = self.no_match
+            d["matched_accuracy"] = self.matched_accuracy
+        return d
+
+
+# ---------------------------------------------------------------------------
+# NeuralGTO lookup evaluation (offline — no API calls)
+# ---------------------------------------------------------------------------
+
+# Map natural-language rank names → single char
+_RANK_NL_MAP = {
+    "ace": "A", "king": "K", "queen": "Q", "jack": "J", "ten": "T",
+    "nine": "9", "eight": "8", "seven": "7", "six": "6", "five": "5",
+    "four": "4", "three": "3", "two": "2", "deuce": "2",
+    # Single-char/digit forms (already short)
+    "a": "A", "k": "K", "q": "Q", "j": "J", "t": "T",
+}
+
+# Map natural-language suit names → single char
+_SUIT_NL_MAP = {
+    "heart": "h", "hearts": "h", "diamond": "d", "diamonds": "d",
+    "club": "c", "clubs": "c", "spade": "s", "spades": "s",
+}
+
+# Regex to parse "King of Heart" style card names
+_CARD_NL_RE = re.compile(
+    r"(ace|king|queen|jack|ten|nine|eight|seven|six|five|four|three|two|deuce)"
+    r"\s+of\s+(heart|hearts|diamond|diamonds|club|clubs|spade|spades)",
+    re.IGNORECASE,
+)
+
+# Regex to parse PokerBench preflop action strings
+# e.g. "HJ raise 2.0, CO call, SB all in"
+_ACTION_RE = re.compile(
+    r"(UTG|HJ|CO|BTN|SB|BB)\s+(raise|call|fold|all\s*in|check)\s*([\d]+\.?\d*)?",
+    re.IGNORECASE,
+)
+
+# Available bet sizes in our pre-solved range tree
+_TREE_SIZES = [2.5, 3.0, 8.5, 9.0, 11.0, 13.0, 20.0, 21.0, 22.0, 24.0, 25.0]
+
+
+def _snap_to_tree_size(amount_bb: float, is_sb_open: bool = False) -> float:
+    """Map a PokerBench raise size to the nearest size in our tree.
+
+    Args:
+        amount_bb: The PB raise amount in big blinds.
+        is_sb_open: True if this is an SB opening raise (uses 3.0bb).
+
+    Returns:
+        The nearest available size from _TREE_SIZES.
+    """
+    if is_sb_open:
+        return 3.0
+    return min(_TREE_SIZES, key=lambda s: abs(s - amount_bb))
+
+
+def _holding_nl_to_cards(nl_holding: str) -> str | None:
+    """Convert PokerBench NL holding to card notation.
+
+    Args:
+        nl_holding: e.g. "King of Heart and King of Club"
+
+    Returns:
+        e.g. "KhKc", or None if unparseable.
+    """
+    cards = _CARD_NL_RE.findall(nl_holding)
+    if len(cards) != 2:
+        return None
+
+    result = ""
+    for rank_nl, suit_nl in cards:
+        rank = _RANK_NL_MAP.get(rank_nl.lower())
+        suit = _SUIT_NL_MAP.get(suit_nl.lower())
+        if rank is None or suit is None:
+            return None
+        result += rank + suit
+    return result
+
+
+def _parse_pb_preflop_actions(instruction: str, hero_pos: str) -> list[ActionEntry]:
+    """Extract preflop action history from PokerBench instruction text.
+
+    Parses "Before the flop, HJ raise 2.0, CO call, ..." into ActionEntry list.
+    Normalizes raise sizes to match our pre-solved range tree sizes.
+
+    Args:
+        instruction: Full PokerBench instruction text.
+        hero_pos: Hero's position (uppercase).
+
+    Returns:
+        List of ActionEntry for all preflop actions in the instruction.
+    """
+    # Extract action text between "Before the flop," and "Assume" or "Now"
+    # Use the region between these markers to avoid decimal-point regex issues.
+    start = instruction.lower().find("before the flop,")
+    if start == -1:
+        return []
+
+    # Find the end marker
+    text_from_start = instruction[start:]
+    end_markers = ["Assume that", "Now it is"]
+    end_pos = len(text_from_start)
+    for marker in end_markers:
+        idx = text_from_start.find(marker)
+        if idx == -1:
+            idx = text_from_start.lower().find(marker.lower())
+        if idx != -1 and idx < end_pos:
+            end_pos = idx
+
+    action_text = text_from_start[:end_pos]
+
+    # Check if it's "no action yet" or "there has been no action"
+    if "no action" in action_text.lower():
+        return []
+
+    entries: list[ActionEntry] = []
+    is_first_raise = True  # Track whether this is the first raise (= open)
+    for match in _ACTION_RE.finditer(action_text):
+        pos = match.group(1).upper()
+        action_raw = match.group(2).lower().replace(" ", "")
+        amount_str = match.group(3)
+
+        # Map action names
+        if action_raw == "allin":
+            action = "allin"
+        elif action_raw == "raise":
+            action = "raise"
+        elif action_raw == "call":
+            action = "call"
+        elif action_raw == "fold":
+            action = "fold"
+        elif action_raw == "check":
+            action = "check"
+        else:
+            action = action_raw
+
+        amount_bb = None
+        if amount_str:
+            raw_amount = float(amount_str)
+            # Snap to nearest tree size
+            is_sb_open = (pos == "SB" and is_first_raise and action == "raise")
+            amount_bb = _snap_to_tree_size(raw_amount, is_sb_open=is_sb_open)
+
+        if action == "raise":
+            is_first_raise = False
+
+        entries.append(ActionEntry(
+            position=pos,
+            action=action,
+            amount_bb=amount_bb,
+            street="preflop",
+        ))
+
+    return entries
+
+
+def _pb_to_scenario(scenario: PBScenario) -> ScenarioData | None:
+    """Convert a PokerBench preflop scenario to ScenarioData.
+
+    Args:
+        scenario: Parsed PBScenario.
+
+    Returns:
+        ScenarioData suitable for lookup_preflop_strategy(), or None.
+    """
+    # Convert NL holding to card notation
+    hero_hand = _holding_nl_to_cards(scenario.hero_holding)
+    if not hero_hand:
+        return None
+
+    hero_pos = scenario.hero_position.upper()
+    if not hero_pos or hero_pos == "UNKNOWN":
+        return None
+
+    # Parse action history from instruction
+    action_history = _parse_pb_preflop_actions(
+        scenario.instruction, hero_pos
+    )
+
+    return ScenarioData(
+        hero_hand=hero_hand,
+        hero_position=hero_pos,
+        board="",
+        pot_size_bb=scenario.pot_size,
+        effective_stack_bb=100.0,  # PokerBench is always 100bb
+        current_street="preflop",
+        oop_range="",
+        ip_range="",
+        hero_is_ip=False,  # Not used by preflop lookup
+        action_history=action_history,
+    )
+
+
+def _predict_neuralgto_lookup(
+    scenario: PBScenario,
+) -> tuple[str, str]:
+    """Get NeuralGTO preflop lookup prediction (offline, no API).
+
+    Converts PBScenario → ScenarioData → lookup_preflop_strategy().
+
+    Args:
+        scenario: The PokerBench scenario.
+
+    Returns:
+        Tuple of (action_category, raw_description).
+    """
+    sd = _pb_to_scenario(scenario)
+    if sd is None:
+        return ("unknown", "[parse error: could not convert scenario]")
+
+    result = lookup_preflop_strategy(sd)
+    if result is None:
+        return ("unknown", "[no matching lookup table entry]")
+
+    # Map lookup best_action to PokerBench-style categories
+    best = result.best_action.lower()
+    if best.startswith("raise"):
+        # Extract size if present: "Raise 2.5bb" → "raise 2.5"
+        size_match = re.search(r"([\d.]+)", result.best_action)
+        if size_match:
+            return ("raise", f"raise {size_match.group(1)}")
+        return ("raise", "raise")
+    elif best == "call":
+        return ("call", "call")
+    elif best == "fold":
+        return ("fold", "fold")
+    elif best == "check":
+        return ("check", "check")
+    elif best.startswith("all"):
+        return ("raise", "raise all-in")
+    else:
+        return (best, best)
 
 
 # ---------------------------------------------------------------------------
@@ -403,19 +660,20 @@ def _aggregate(
 # ---------------------------------------------------------------------------
 
 def run_evaluation(
-    mode: Literal["gemini_direct", "neuralgto_fast"] = "gemini_direct",
-    split: Literal["preflop", "postflop", "all"] = "all",
+    mode: Literal["gemini_direct", "neuralgto_fast", "neuralgto_lookup"] = "neuralgto_lookup",
+    split: Literal["preflop", "postflop", "all"] = "preflop",
     limit: int | None = None,
     progress_callback: callable | None = None,
     save_results: bool = True,
 ) -> EvalReport:
     """Run PokerBench evaluation.
 
-    Downloads test data on first call, runs predictions via Gemini API,
-    and computes accuracy metrics.
+    Downloads test data on first call, runs predictions, and computes
+    accuracy metrics.
 
     Args:
         mode: Evaluation mode.
+            "neuralgto_lookup" — Preflop lookup tables (offline, instant).
             "gemini_direct" — Vanilla Gemini (LLM baseline for paper).
             "neuralgto_fast" — Enhanced poker-theory prompting.
         split: Dataset split to evaluate.
@@ -427,14 +685,25 @@ def run_evaluation(
     Returns:
         EvalReport with all metrics.
     """
-    from dotenv import load_dotenv
-    load_dotenv(override=True)
-    # Re-read the key in case .env was updated
-    api_key = config.GEMINI_API_KEY
-
     logger.info("Loading PokerBench %s test set...", split)
     scenarios = load_test_set(split, limit=limit)
     logger.info("Loaded %d scenarios", len(scenarios))
+
+    # ---- neuralgto_lookup: offline, no API key needed ----
+    if mode == "neuralgto_lookup":
+        if not is_preflop_lookup_available():
+            raise RuntimeError(
+                "Preflop lookup tables not found. Ensure solver_bin/ "
+                "contains the Pio range files."
+            )
+        return _run_lookup_evaluation(
+            scenarios, split, progress_callback, save_results
+        )
+
+    # ---- LLM-based modes: require Gemini API key ----
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    api_key = config.GEMINI_API_KEY
 
     client = genai.Client(api_key=api_key)
 
@@ -468,13 +737,80 @@ def run_evaluation(
         if progress_callback:
             progress_callback(i + 1, len(scenarios), result)
 
-        # Rate limiting: ~15 RPM for free tier, ~60 RPM for paid
-        # Be conservative — 0.5s between calls
+        # Rate limiting for API modes
         if i < len(scenarios) - 1:
             time.sleep(0.5)
 
     total_time = time.time() - start_time
     report = _aggregate(results, mode, split, total_time)
+
+    if save_results:
+        _save_report(report)
+
+    return report
+
+
+def _run_lookup_evaluation(
+    scenarios: list[PBScenario],
+    split: str,
+    progress_callback: callable | None,
+    save_results: bool,
+) -> EvalReport:
+    """Run offline preflop lookup evaluation (no API calls).
+
+    Args:
+        scenarios: PokerBench scenarios to evaluate.
+        split: Dataset split name.
+        progress_callback: Optional progress callback.
+        save_results: Whether to save results JSON.
+
+    Returns:
+        EvalReport with all metrics.
+    """
+    results: list[EvalResult] = []
+    start_time = time.time()
+
+    for i, scenario in enumerate(scenarios):
+        t0 = time.time()
+        result = EvalResult(scenario=scenario)
+
+        try:
+            action_cat, raw = _predict_neuralgto_lookup(scenario)
+            result.predicted_action = action_cat
+            result.predicted_raw = raw
+            result.correct = action_matches(raw, scenario.ground_truth)
+        except Exception as e:
+            result.error = str(e)
+            logger.warning("Error on scenario %d: %s", i, e)
+
+        result.latency_s = time.time() - t0
+        results.append(result)
+
+        if progress_callback:
+            progress_callback(i + 1, len(scenarios), result)
+
+    total_time = time.time() - start_time
+    report = _aggregate(results, "neuralgto_lookup", split, total_time)
+
+    # Compute coverage stats
+    no_match_marker = "[no matching lookup table entry]"
+    parse_error_marker = "[parse error"
+    report.no_match = sum(
+        1 for r in results
+        if r.predicted_raw.startswith(no_match_marker)
+        or r.predicted_raw.startswith(parse_error_marker)
+    )
+    report.matched = report.total - report.no_match - report.errors
+    matched_correct = sum(
+        1 for r in results
+        if r.correct
+        and not r.predicted_raw.startswith(no_match_marker)
+        and not r.predicted_raw.startswith(parse_error_marker)
+        and not r.error
+    )
+    report.matched_accuracy = (
+        matched_correct / max(report.matched, 1)
+    )
 
     if save_results:
         _save_report(report)

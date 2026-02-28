@@ -20,6 +20,10 @@ from poker_gpt.evaluation.pokerbench import (
 from poker_gpt.evaluation.evaluator import (
     EvalResult,
     _aggregate,
+    _holding_nl_to_cards,
+    _parse_pb_preflop_actions,
+    _snap_to_tree_size,
+    _pb_to_scenario,
 )
 
 
@@ -269,3 +273,164 @@ class TestDatasetStats:
         assert stats["by_street"]["preflop"] == 2
         assert stats["by_action"]["call"] == 1
         assert stats["by_action"]["fold"] == 1
+
+
+# ---------------------------------------------------------------------------
+# NL holding conversion
+# ---------------------------------------------------------------------------
+
+class TestHoldingNlToCards:
+    """Tests for _holding_nl_to_cards."""
+
+    def test_pair(self):
+        assert _holding_nl_to_cards("King of Heart and King of Club") == "KhKc"
+
+    def test_suited(self):
+        assert _holding_nl_to_cards("Ace of Spade and Queen of Spade") == "AsQs"
+
+    def test_offsuit(self):
+        assert _holding_nl_to_cards("Jack of Diamond and Ten of Heart") == "JdTh"
+
+    def test_low_cards(self):
+        assert _holding_nl_to_cards("Two of Club and Three of Diamond") == "2c3d"
+
+    def test_invalid(self):
+        assert _holding_nl_to_cards("not a hand") is None
+
+    def test_single_card(self):
+        assert _holding_nl_to_cards("Ace of Spade") is None
+
+
+# ---------------------------------------------------------------------------
+# Size snapping
+# ---------------------------------------------------------------------------
+
+class TestSnapToTreeSize:
+    """Tests for _snap_to_tree_size."""
+
+    def test_exact_match(self):
+        assert _snap_to_tree_size(2.5) == 2.5
+
+    def test_open_2_0_maps_to_2_5(self):
+        assert _snap_to_tree_size(2.0) == 2.5
+
+    def test_open_2_3_maps_to_2_5(self):
+        assert _snap_to_tree_size(2.3) == 2.5
+
+    def test_sb_open(self):
+        assert _snap_to_tree_size(3.0, is_sb_open=True) == 3.0
+
+    def test_3bet_6_5_maps_to_nearest(self):
+        # 6.5 is closer to 8.5 than to 3.0
+        result = _snap_to_tree_size(6.5)
+        assert result in (8.5, 3.0)  # Should be closest
+
+    def test_4bet_24_3(self):
+        result = _snap_to_tree_size(24.3)
+        assert result == 24.0
+
+
+# ---------------------------------------------------------------------------
+# Preflop action parsing
+# ---------------------------------------------------------------------------
+
+class TestParsePbPreflopActions:
+    """Tests for _parse_pb_preflop_actions."""
+
+    def test_no_action(self):
+        inst = "Before the flop, there has been no action yet. Now it is your turn."
+        entries = _parse_pb_preflop_actions(inst, "SB")
+        assert entries == []
+
+    def test_single_raise(self):
+        inst = "Before the flop, HJ raise 2.0. Assume that all other players folded."
+        entries = _parse_pb_preflop_actions(inst, "CO")
+        assert len(entries) == 1
+        assert entries[0].position == "HJ"
+        assert entries[0].action == "raise"
+        assert entries[0].amount_bb == 2.5  # snapped from 2.0
+
+    def test_multiple_actions(self):
+        inst = ("Before the flop, HJ raise 2.0, CO call, SB call, "
+                "BB raise 15.0. Assume that all other players folded.")
+        entries = _parse_pb_preflop_actions(inst, "HJ")
+        assert len(entries) == 4
+        assert entries[0].position == "HJ"
+        assert entries[1].position == "CO"
+        assert entries[1].action == "call"
+        assert entries[2].position == "SB"
+        assert entries[3].position == "BB"
+        assert entries[3].action == "raise"
+
+    def test_allin(self):
+        inst = "Before the flop, SB all in. Assume that all others folded."
+        entries = _parse_pb_preflop_actions(inst, "BB")
+        assert len(entries) == 1
+        assert entries[0].action == "allin"
+
+    def test_no_before_the_flop(self):
+        inst = "Some random text without the keyword."
+        entries = _parse_pb_preflop_actions(inst, "BB")
+        assert entries == []
+
+
+# ---------------------------------------------------------------------------
+# PBScenario to ScenarioData conversion
+# ---------------------------------------------------------------------------
+
+class TestPbToScenario:
+    """Tests for _pb_to_scenario."""
+
+    def test_basic_conversion(self):
+        sc = PBScenario(
+            instruction=(
+                "In this hand, your position is SB, and your holding is "
+                "[Ace of Heart and King of Club]. "
+                "Before the flop, there has been no action yet. "
+                "Assume that all other players folded."
+            ),
+            ground_truth="raise 3.0",
+            action_category="raise",
+            bet_size=3.0,
+            street="preflop",
+            hero_position="SB",
+            hero_holding="Ace of Heart and King of Club",
+        )
+        sd = _pb_to_scenario(sc)
+        assert sd is not None
+        assert sd.hero_hand == "AhKc"
+        assert sd.hero_position == "SB"
+        assert sd.current_street == "preflop"
+        assert sd.action_history == []
+
+    def test_with_action_history(self):
+        sc = PBScenario(
+            instruction=(
+                "In this hand, your position is BB. "
+                "Before the flop, BTN raise 2.0. "
+                "Assume that all other players folded."
+            ),
+            ground_truth="call",
+            action_category="call",
+            street="preflop",
+            hero_position="BB",
+            hero_holding="Jack of Diamond and Ten of Diamond",
+        )
+        sd = _pb_to_scenario(sc)
+        assert sd is not None
+        assert sd.hero_hand == "JdTd"
+        assert len(sd.action_history) == 1
+        assert sd.action_history[0].position == "BTN"
+        assert sd.action_history[0].amount_bb == 2.5  # snapped
+
+    def test_invalid_holding(self):
+        sc = PBScenario(
+            instruction="some text",
+            ground_truth="fold",
+            action_category="fold",
+            street="preflop",
+            hero_position="BB",
+            hero_holding="invalid",
+        )
+        assert _pb_to_scenario(sc) is None
+

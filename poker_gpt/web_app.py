@@ -30,6 +30,11 @@ from poker_gpt.cache import get_cache_stats, clear_cache
 from poker_gpt.hand_history import parse_hand_history, hand_to_query, hands_summary
 from poker_gpt.quiz import score_user_action, generate_quiz_feedback, QuizScore
 from poker_gpt import config
+
+# Auto-download solver binary on Linux (Streamlit Cloud) if not present
+if config.IS_LINUX and not is_solver_available():
+    config.ensure_solver_binary()
+
 from poker_gpt.security import (
     check_rate_limit,
     check_global_rate_limit,

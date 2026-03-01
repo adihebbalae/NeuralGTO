@@ -33,6 +33,86 @@ IS_LINUX = PLATFORM == "Linux"
 IS_MAC = PLATFORM == "Darwin"
 
 # ──────────────────────────────────────────────
+# TexasSolver Auto-Download (for Streamlit Cloud / Linux)
+# ──────────────────────────────────────────────
+_SOLVER_RELEASE_URL = (
+    "https://github.com/bupticybee/TexasSolver/releases/download/"
+    "v0.2.0/TexasSolver-v0.2.0-Linux.zip"
+)
+
+
+def ensure_solver_binary() -> bool:
+    """Download and set up the TexasSolver Linux binary if not present.
+
+    Called on Streamlit Cloud (Linux) to auto-provision the solver on
+    first run. Downloads from GitHub Releases, extracts, and sets
+    execute permission.
+
+    Returns:
+        True if binary is available (downloaded or already exists), False on error.
+    """
+    solver_dir = _PROJECT_ROOT / "solver_bin" / "TexasSolver-v0.2.0-Linux"
+    binary = solver_dir / "console_solver"
+    resources = solver_dir / "resources"
+
+    # Already set up — nothing to do
+    if binary.exists() and resources.exists():
+        return True
+
+    # Only auto-download on Linux (Streamlit Cloud)
+    if IS_WINDOWS:
+        return False
+
+    import io
+    import stat
+    import zipfile
+    import urllib.request
+
+    try:
+        print("[CONFIG] Downloading TexasSolver v0.2.0 Linux binary...")
+        solver_dir.mkdir(parents=True, exist_ok=True)
+
+        # Download the release zip
+        with urllib.request.urlopen(_SOLVER_RELEASE_URL, timeout=120) as resp:
+            zip_data = io.BytesIO(resp.read())
+
+        # Extract — the zip contains "TexasSolver-v0.2.0-Linux/" as root
+        with zipfile.ZipFile(zip_data) as zf:
+            for member in zf.namelist():
+                # Skip macOS metadata (__MACOSX/) and .DS_Store
+                if "__MACOSX" in member or ".DS_Store" in member:
+                    continue
+                # Strip the root dir prefix
+                prefix = "TexasSolver-v0.2.0-Linux/"
+                if member.startswith(prefix):
+                    rel_path = member[len(prefix):]
+                else:
+                    continue
+                if not rel_path:
+                    continue
+
+                target = solver_dir / rel_path
+                if member.endswith("/"):
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as src, open(target, "wb") as dst:
+                        dst.write(src.read())
+
+        # Set execute permission on the binary
+        if binary.exists():
+            binary.chmod(binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+            print(f"[CONFIG] TexasSolver ready at {binary}")
+            return True
+        else:
+            print("[CONFIG] Download completed but binary not found in archive.")
+            return False
+
+    except Exception as e:
+        print(f"[CONFIG] Failed to download solver: {e}")
+        return False
+
+# ──────────────────────────────────────────────
 # Google Gemini Configuration
 # ──────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")

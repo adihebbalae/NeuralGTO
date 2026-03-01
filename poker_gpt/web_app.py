@@ -333,20 +333,20 @@ if not _is_quiz:
             else:
                 try:
                     hh_text = hh_file.read().decode("utf-8", errors="replace")
-                hh_hands = parse_hand_history(hh_text, hero_name=hh_hero)
-                if not hh_hands:
-                    st.warning("No parseable hands found in file.")
-                else:
-                    summaries = hands_summary(hh_hands)
-                    chosen = st.selectbox(
-                        f"Select a hand ({len(hh_hands)} found):",
-                        options=list(range(len(summaries))),
-                        format_func=lambda i: summaries[i],
-                        key="hh_select",
-                    )
-                    if st.button("Use this hand", key="hh_use"):
-                        st.session_state["query"] = hand_to_query(hh_hands[chosen])
-                        st.rerun()
+                    hh_hands = parse_hand_history(hh_text, hero_name=hh_hero)
+                    if not hh_hands:
+                        st.warning("No parseable hands found in file.")
+                    else:
+                        summaries = hands_summary(hh_hands)
+                        chosen = st.selectbox(
+                            f"Select a hand ({len(hh_hands)} found):",
+                            options=list(range(len(summaries))),
+                            format_func=lambda i: summaries[i],
+                            key="hh_select",
+                        )
+                        if st.button("Use this hand", key="hh_use"):
+                            st.session_state["query"] = hand_to_query(hh_hands[chosen])
+                            st.rerun()
                 except Exception as e:
                     st.error(f"Error parsing hand history: {e}")
 

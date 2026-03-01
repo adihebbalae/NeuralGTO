@@ -39,6 +39,13 @@ def generate_solver_input(
     Returns:
         Path to the generated input file.
     """
+    # TexasSolver is postflop-only — reject preflop scenarios early
+    if scenario.current_street == "preflop":
+        raise ValueError(
+            "TexasSolver only supports postflop scenarios. "
+            "Preflop hands must use the preflop lookup table or LLM fallback."
+        )
+
     if output_path is None:
         output_path = config.SOLVER_INPUT_FILE
     

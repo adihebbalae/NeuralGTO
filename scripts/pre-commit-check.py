@@ -57,13 +57,13 @@ CODE_VIOLATIONS = [
 # ── Files / paths that must never be staged ──────────────────────────────────
 # Each entry: (regex matched against staged filename, label)
 FORBIDDEN_PATHS = [
-    (r'^\.env$',          ".env — credentials file"),
-    (r'^\.env\.',         ".env variant — credentials file"),
-    (r'^_priv/',          "_priv/ — local-only private folder"),
-    (r'^_dev/',           "_dev/ — local-only private folder"),
-    (r'^_notes/',         "_notes/ — local-only private folder"),
-    (r'^\.github/',       ".github/ — local-only agent prompts"),
-    (r'^solver_bin/',     "solver_bin/ — binary files, gitignored"),
+    (r'^\.env$',                    ".env — credentials file"),
+    (r'^\.env\.(?!example$)',       ".env variant — credentials file"),
+    (r'^_priv/',                    "_priv/ — local-only private folder"),
+    (r'^_dev/',                     "_dev/ — local-only private folder"),
+    (r'^_notes/',                   "_notes/ — local-only private folder"),
+    (r'^\.github/',                 ".github/ — local-only agent prompts"),
+    (r'^solver_bin/',               "solver_bin/ — binary files, gitignored"),
 ]
 
 # ── Whitelist: lines containing these are skipped for secret checks ───────────

@@ -70,6 +70,7 @@ from poker_gpt.hand_history import (
     hand_to_query,
     hands_summary,
 )
+from poker_gpt.security import sanitize_input
 from poker_gpt.spot_frequency import (
     get_spot_frequency,
     format_spot_frequency_for_advisor,
@@ -168,7 +169,30 @@ def analyze_hand(
     config.ensure_work_dir()
     preset = config.MODE_PRESETS.get(mode, config.MODE_PRESETS["default"])
 
-    # ── Step 0: Pre-parse query validation (saves Gemini tokens) ──
+    # ── Step 0a: Input sanitization (defense-in-depth — web_app also sanitizes) ──
+    query, input_warnings = sanitize_input(query)
+    if not query:
+        _status(f"  \u26a0 Input rejected: {'; '.join(input_warnings)}")
+        return {
+            "advice": "Your input was rejected. " + " ".join(input_warnings),
+            "mode": mode,
+            "scenario": None,
+            "strategy": None,
+            "sanity_note": "",
+            "cached": False,
+            "solve_time": 0.0,
+            "source": "validation_error",
+            "confidence": "low",
+            "parse_time": 0.0,
+            "spot_frequency": None,
+            "output_level": output_level,
+        }
+    if opponent_notes:
+        opponent_notes, opp_warnings = sanitize_input(opponent_notes, max_length=500)
+        if not opponent_notes and opp_warnings:
+            _status(f"  \u26a0 Opponent notes rejected: {'; '.join(opp_warnings)}")
+
+    # ── Step 0b: Pre-parse query validation (saves Gemini tokens) ──
     query_errors = validate_query_completeness(query)
     if query_errors:
         error_msg = format_validation_errors(
@@ -281,6 +305,27 @@ def analyze_hand(
             }
         else:
             _status("  No exact preflop match — falling back to LLM mode")
+            # TexasSolver is postflop-only; always use LLM for preflop
+            t_fb = time.time()
+            advice = generate_fallback_advice(
+                query, scenario, opponent_notes=opponent_notes, output_level=output_level,
+            )
+            source = "llm_fallback"
+            _status(f"  \u2713 Generated in {time.time()-t_fb:.1f}s")
+            return {
+                "advice": advice,
+                "mode": mode,
+                "scenario": scenario,
+                "strategy": None,
+                "sanity_note": "",
+                "cached": False,
+                "solve_time": 0.0,
+                "source": source,
+                "confidence": _CONFIDENCE_MAP.get(source, "low"),
+                "parse_time": parse_time,
+                "spot_frequency": spot_freq_info,
+                "output_level": output_level,
+            }
 
     if not use_solver:
         # ── Fast / LLM-only mode ──
@@ -306,12 +351,32 @@ def analyze_hand(
 
     # ── Step 2: Generate solver input file (with mode-specific settings) ──
     _status("Step 2/5: Generating solver input...")
-    input_file = generate_solver_input(
-        scenario,
-        accuracy=preset.get("accuracy"),
-        max_iterations=preset.get("max_iterations"),
-        dump_rounds=preset.get("dump_rounds"),
-    )
+    try:
+        input_file = generate_solver_input(
+            scenario,
+            accuracy=preset.get("accuracy"),
+            max_iterations=preset.get("max_iterations"),
+            dump_rounds=preset.get("dump_rounds"),
+        )
+    except ValueError as e:
+        _status(f"  ✗ Solver input error: {e}")
+        _status("  Falling back to LLM-only mode...")
+        advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes, output_level=output_level)
+        source = "llm_fallback"
+        return {
+            "advice": advice,
+            "mode": mode,
+            "scenario": scenario,
+            "strategy": None,
+            "sanity_note": "",
+            "cached": False,
+            "solve_time": 0.0,
+            "source": source,
+            "confidence": _CONFIDENCE_MAP.get(source, "low"),
+            "parse_time": parse_time,
+            "spot_frequency": spot_freq_info,
+            "output_level": output_level,
+        }
 
     # ── Step 2.5: Check cache ──
     cache_key = compute_cache_key(input_file)
@@ -927,6 +992,14 @@ def _handle_import_hh(
     import os
     if not os.path.isfile(filepath):
         print(f"  \u2717 File not found: {filepath}")
+        return
+
+    # SECURITY: Prevent path traversal — only allow files in CWD or known dirs
+    resolved = os.path.realpath(filepath)
+    cwd = os.path.realpath(os.getcwd())
+    home = os.path.realpath(str(Path.home()))
+    if not (resolved.startswith(cwd) or resolved.startswith(home)):
+        print(f"  \u2717 Access denied: file must be under your working directory or home folder.")
         return
 
     try:

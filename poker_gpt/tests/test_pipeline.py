@@ -151,6 +151,29 @@ def test_solver_input_generation():
     print(f"  ✓ File: {result_path}")
 
 
+def test_solver_input_rejects_preflop():
+    """Test that generate_solver_input raises ValueError for preflop scenarios."""
+    print("Testing solver input rejects preflop...")
+
+    preflop_scenario = ScenarioData(
+        hero_hand="QhQd",
+        hero_position="BTN",
+        board="",
+        pot_size_bb=6.5,
+        effective_stack_bb=100.0,
+        current_street="preflop",
+        oop_range="AA,KK,QQ,AKs",
+        ip_range="TT+,AQs+,AKo",
+        hero_is_ip=True,
+        action_history=[],
+    )
+
+    with pytest.raises(ValueError, match="postflop"):
+        generate_solver_input(preflop_scenario)
+
+    print("  ✓ Correctly rejected preflop scenario")
+
+
 def test_strategy_extraction():
     """Test extracting strategy from sample solver output."""
     print("Testing strategy extraction...")

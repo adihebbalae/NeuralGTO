@@ -5,23 +5,27 @@ Uses Google Gemini to parse a natural language poker hand description
 into a structured ScenarioData object that can be fed to the solver.
 
 Created: 2026-02-06
-Updated: 2026-02-06 — Replaced OpenAI with Google Gemini
+Updated: 2026-02-28 — Added retry logic for truncated/invalid JSON responses
 
 DOCUMENTATION:
 - Input: A string like "I have QQ on the button, UTG raises to 4bb..."
 - Output: ScenarioData dataclass with all fields populated
 - The Gemini model estimates ranges based on positions and actions
 - Uses the parser_system.txt prompt for consistent output format
+- Retries up to 2 times on truncated or invalid JSON responses
 """
 
 import json
 import re
+import time
 from pathlib import Path
 from google import genai
 from google.genai import types
 
 from poker_gpt.poker_types import ScenarioData, ActionEntry
 from poker_gpt import config
+
+_MAX_PARSE_RETRIES = 2
 
 
 def _load_system_prompt() -> str:
@@ -31,26 +35,72 @@ def _load_system_prompt() -> str:
         return f.read()
 
 
-def parse_scenario(user_input: str) -> ScenarioData:
-    """
-    Parse a natural language poker scenario into structured data.
-    
+def _repair_truncated_json(text: str) -> str:
+    """Attempt to repair JSON that was truncated mid-generation.
+
+    Handles common truncation patterns: unclosed strings, missing brackets/braces.
+    Tracks the actual nesting stack so closers are emitted in the correct order.
+    Returns the repaired text (best-effort) — caller should still try json.loads.
+
     Args:
-        user_input: Natural language description of the poker hand.
-        
+        text: The raw (possibly truncated) JSON string.
+
     Returns:
-        ScenarioData object with all fields populated.
-        
-    Raises:
-        ValueError: If the GPT response cannot be parsed.
-        RuntimeError: If the API call fails.
+        A best-effort repaired JSON string.
     """
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
-    system_prompt = _load_system_prompt()
-    
-    if config.DEBUG:
-        print(f"[NL_PARSER] Sending scenario to Gemini: {user_input[:100]}...")
-    
+    # Strip trailing whitespace
+    text = text.rstrip()
+
+    # Walk through the text tracking string state and nesting stack
+    in_string = False
+    stack: list[str] = []  # tracks open '{' and '['
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if ch == '\\':
+                i += 2  # skip escaped char
+                continue
+            if ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == '{':
+                stack.append('}')
+            elif ch == '[':
+                stack.append(']')
+            elif ch in ('}', ']') and stack and stack[-1] == ch:
+                stack.pop()
+        i += 1
+
+    # Close unclosed string
+    if in_string:
+        text += '"'
+
+    # Remove any trailing comma or colon (incomplete key-value pair)
+    text = re.sub(r'[,:\s]+$', '', text)
+
+    # Close nesting in reverse order (innermost first)
+    text += ''.join(reversed(stack))
+
+    return text
+
+
+def _call_gemini(client: genai.Client, system_prompt: str, user_input: str) -> str:
+    """Make a single Gemini API call and return the raw response text.
+
+    Args:
+        client: Initialized genai Client.
+        system_prompt: System instruction for the parser.
+        user_input: The user's poker scenario description.
+
+    Returns:
+        Raw response text from Gemini.
+
+    Raises:
+        RuntimeError: On API errors or empty responses.
+    """
     try:
         response = client.models.generate_content(
             model=config.GEMINI_MODEL,
@@ -67,30 +117,103 @@ def parse_scenario(user_input: str) -> ScenarioData:
         if "quota" in error_msg.lower() or "429" in error_msg:
             raise RuntimeError(
                 "Gemini API quota exceeded. Check your billing at "
-                "https://console.cloud.google.com/billing\n"
-                f"Original error: {e}"
+                "https://console.cloud.google.com/billing"
             )
-        raise RuntimeError(f"Gemini API call failed: {e}")
-    
+        # SECURITY: Don't leak raw API error details (may contain keys/internal info)
+        if config.DEBUG:
+            raise RuntimeError(f"Gemini API call failed: {e}")
+        raise RuntimeError(
+            "Gemini API call failed. Enable debug mode for details."
+        )
+
     raw_response = response.text
     if not raw_response:
         raise RuntimeError(
             "Gemini returned an empty response. The request may have been "
             "blocked by safety filters or the model returned no candidates."
         )
-    
-    if config.DEBUG:
-        print(f"[NL_PARSER] Raw Gemini response:\n{raw_response}")
-    
-    # Parse the JSON response — clean up trailing commas that some models produce
+    return raw_response
+
+
+def _parse_json_response(raw_response: str) -> dict:
+    """Parse and clean a raw JSON response from Gemini.
+
+    Handles trailing commas and attempts truncation repair if the initial
+    parse fails.
+
+    Args:
+        raw_response: Raw text from Gemini.
+
+    Returns:
+        Parsed dict.
+
+    Raises:
+        ValueError: If JSON cannot be parsed even after repair.
+    """
+    # Clean trailing commas that some models produce
     cleaned = re.sub(r',\s*([}\]])', r'\1', raw_response)
     try:
-        data = json.loads(cleaned)
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass  # Fall through to repair attempt
+
+    # Attempt truncation repair
+    repaired = _repair_truncated_json(raw_response)
+    repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+    try:
+        return json.loads(repaired)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Gemini returned invalid JSON: {e}\nRaw: {raw_response}")
-    
-    # Validate and convert to ScenarioData
-    return _dict_to_scenario(data)
+        raise ValueError(
+            f"Gemini returned invalid JSON: {e}\nRaw: {raw_response[:500]}"
+        )
+
+
+def parse_scenario(user_input: str) -> ScenarioData:
+    """
+    Parse a natural language poker scenario into structured data.
+
+    Retries up to ``_MAX_PARSE_RETRIES`` times on truncated or invalid JSON.
+
+    Args:
+        user_input: Natural language description of the poker hand.
+
+    Returns:
+        ScenarioData object with all fields populated.
+
+    Raises:
+        ValueError: If the response cannot be parsed after retries.
+        RuntimeError: If the API call fails.
+    """
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
+    system_prompt = _load_system_prompt()
+
+    if config.DEBUG:
+        print(f"[NL_PARSER] Sending scenario to Gemini: {user_input[:100]}...")
+
+    last_error: Exception | None = None
+
+    for attempt in range(_MAX_PARSE_RETRIES + 1):
+        if attempt > 0:
+            if config.DEBUG:
+                print(f"[NL_PARSER] Retry {attempt}/{_MAX_PARSE_RETRIES} after invalid JSON")
+            time.sleep(1)  # Brief backoff before retry
+
+        raw_response = _call_gemini(client, system_prompt, user_input)
+
+        if config.DEBUG:
+            print(f"[NL_PARSER] Raw Gemini response (attempt {attempt + 1}):\n{raw_response}")
+
+        try:
+            data = _parse_json_response(raw_response)
+            return _dict_to_scenario(data)
+        except ValueError as e:
+            last_error = e
+            if config.DEBUG:
+                print(f"[NL_PARSER] Parse failed (attempt {attempt + 1}): {e}")
+            continue
+
+    # All attempts exhausted
+    raise ValueError(str(last_error))
 
 
 def _dict_to_scenario(data: dict) -> ScenarioData:

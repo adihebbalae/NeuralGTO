@@ -38,16 +38,19 @@ from poker_gpt.security import (
     check_daily_budget,
     detect_abuse,
     record_daily_usage,
+    get_client_ip,
+    check_anon_limit,
+    record_anon_use,
     MAX_REQUESTS_PER_SESSION,
+    ANON_DAILY_LIMIT,
 )
 from poker_gpt.auth import (
     register,
     login,
-    check_free_tier,
+    check_login_lockout,
     record_user_usage,
     check_user_daily_limit,
     get_user_stats,
-    FREE_USES_PER_SESSION,
 )
 
 
@@ -107,7 +110,6 @@ if "session_id" not in st.session_state:
     import uuid
     st.session_state["session_id"] = str(uuid.uuid4())
     st.session_state["request_count"] = 0
-    st.session_state["free_uses"] = 0  # analyses done anonymously this session
     st.session_state["authenticated"] = False
     st.session_state["user_email"] = None
 
@@ -126,6 +128,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Client IP for rate limiting (persists across page refreshes, unlike session_id)
+_client_ip = get_client_ip()
+
+# ── Debug mode production guard ──
+if config.DEBUG:
+    st.warning(
+        "⚠️ **DEBUG MODE IS ON** — Stack traces and verbose logging are visible. "
+        "Set `POKERGPT_DEBUG=false` before deploying to production.",
+        icon="🔓",
+    )
 
 # ──────────────────────────────────────────────
 # Sidebar — Settings & Info
@@ -169,25 +181,30 @@ with st.sidebar:
             st.session_state["user_email"] = None
             st.rerun()
     else:
-        _free_left = max(FREE_USES_PER_SESSION - st.session_state.get("free_uses", 0), 0)
-        st.markdown(f"**Free uses left:** {_free_left}")
-        st.caption("Sign in for unlimited daily access.")
+        _, _free_left = check_anon_limit(_client_ip)
+        st.markdown(f"**Free uses left:** {_free_left} / {ANON_DAILY_LIMIT} today")
+        st.caption("Sign in for more daily analyses.")
         _auth_tab = st.radio("", ["Sign in", "Register"], horizontal=True, label_visibility="collapsed")
         _auth_email = st.text_input("Email", key="auth_email")
         _auth_pass = st.text_input("Password", type="password", key="auth_pass")
         if _auth_tab == "Sign in":
             if st.button("Sign in", use_container_width=True, type="primary"):
-                ok, msg = login(_auth_email, _auth_pass)
-                if ok:
-                    st.session_state["authenticated"] = True
-                    st.session_state["user_email"] = _auth_email.strip().lower()
-                    st.success(msg)
-                    st.rerun()
+                # Brute-force lockout check before attempting login
+                _lockout_ok, _lockout_wait = check_login_lockout(_client_ip)
+                if not _lockout_ok:
+                    st.error(f"Too many login attempts. Try again in {_lockout_wait // 60 + 1} minutes.")
                 else:
-                    st.error(msg)
+                    ok, msg = login(_auth_email, _auth_pass, client_ip=_client_ip)
+                    if ok:
+                        st.session_state["authenticated"] = True
+                        st.session_state["user_email"] = _auth_email.strip().lower()
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
         else:
             if st.button("Create account", use_container_width=True, type="primary"):
-                ok, msg = register(_auth_email, _auth_pass)
+                ok, msg = register(_auth_email, _auth_pass, client_ip=_client_ip)
                 if ok:
                     st.session_state["authenticated"] = True
                     st.session_state["user_email"] = _auth_email.strip().lower()
@@ -301,8 +318,16 @@ if not _is_quiz:
             key="hh_hero",
         )
         if hh_file is not None:
-            try:
-                hh_text = hh_file.read().decode("utf-8", errors="replace")
+            # T7: Cap uploaded file size to prevent memory abuse
+            _MAX_UPLOAD_BYTES = 512 * 1024  # 512 KB
+            hh_file.seek(0, 2)  # seek to end
+            _file_size = hh_file.tell()
+            hh_file.seek(0)     # reset to start
+            if _file_size > _MAX_UPLOAD_BYTES:
+                st.error(f"File too large ({_file_size // 1024} KB). Maximum is {_MAX_UPLOAD_BYTES // 1024} KB.")
+            else:
+                try:
+                    hh_text = hh_file.read().decode("utf-8", errors="replace")
                 hh_hands = parse_hand_history(hh_text, hero_name=hh_hero)
                 if not hh_hands:
                     st.warning("No parseable hands found in file.")
@@ -317,8 +342,8 @@ if not _is_quiz:
                     if st.button("Use this hand", key="hh_use"):
                         st.session_state["query"] = hand_to_query(hh_hands[chosen])
                         st.rerun()
-            except Exception as e:
-                st.error(f"Error parsing hand history: {e}")
+                except Exception as e:
+                    st.error(f"Error parsing hand history: {e}")
 
 
 # ──────────────────────────────────────────────
@@ -568,24 +593,33 @@ if mode:
         st.warning("Please describe a poker hand first.")
         st.stop()
 
-    # ── Security checks ──────────────────────────
-    session_id = st.session_state["session_id"]
+    # ── Security checks (keyed on IP, not session — survives refresh) ──
 
     # Cooldown
-    allowed, remaining = check_cooldown(session_id)
+    allowed, remaining = check_cooldown(_client_ip)
     if not allowed:
         st.warning(f"Please wait {remaining:.0f} seconds between requests.")
         st.stop()
 
-    # Input sanitization
+    # Input sanitization — main query
     query, input_warnings = sanitize_input(query)
     for w in input_warnings:
         st.warning(w)
     if not query.strip():
         st.stop()
 
-    # Per-session rate limit
-    allowed, msg = check_rate_limit(session_id)
+    # T5: Sanitize opponent/pool notes (these also go to Gemini)
+    if opponent_notes:
+        opponent_notes, _opp_warns = sanitize_input(opponent_notes, max_length=500)
+        for w in _opp_warns:
+            st.warning(f"Opponent notes: {w}")
+    if pool_notes:
+        pool_notes, _pool_warns = sanitize_input(pool_notes, max_length=500)
+        for w in _pool_warns:
+            st.warning(f"Pool notes: {w}")
+
+    # Per-IP rate limit (replaces per-session — can't be bypassed by refresh)
+    allowed, msg = check_rate_limit(_client_ip)
     if not allowed:
         st.error(f"🚫 {msg}")
         st.stop()
@@ -603,21 +637,20 @@ if mode:
         st.stop()
 
     # Abuse detection
-    is_suspicious, reason = detect_abuse(session_id, query)
+    is_suspicious, reason = detect_abuse(_client_ip, query)
     if is_suspicious:
         st.error(f"🚫 Request blocked: {reason}")
         st.stop()
 
-    # ── Auth / free-tier gate ────────────────────
+    # ── Auth / free-tier gate (IP-based, survives page refresh) ──
     if not st.session_state.get("authenticated"):
-        free_uses = st.session_state.get("free_uses", 0)
-        allowed, remaining = check_free_tier(free_uses)
+        allowed, remaining = check_anon_limit(_client_ip)
         if not allowed:
             st.warning(
-                "🔒 **Free use exhausted.** Sign in (sidebar) for unlimited daily access."
+                "🔒 **Free daily uses exhausted.** "
+                "Sign in or create an account (sidebar) for more analyses."
             )
             st.stop()
-        # Will be incremented after successful analysis
     else:
         # Authenticated user — check their personal daily limit
         _user_email = st.session_state["user_email"]
@@ -705,9 +738,9 @@ See `.streamlit/secrets.toml.example` for the template.
         # Record daily usage after a successful analysis
         record_daily_usage()
 
-        # Track auth: increment free uses or record user usage
+        # Track auth: record anonymous IP usage or authenticated user usage
         if not st.session_state.get("authenticated"):
-            st.session_state["free_uses"] = st.session_state.get("free_uses", 0) + 1
+            record_anon_use(_client_ip)
         else:
             record_user_usage(st.session_state["user_email"])
 

@@ -24,6 +24,7 @@ DOCUMENTATION:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -38,13 +39,13 @@ from poker_gpt import config
 # Configuration constants (overridable via env)
 # ──────────────────────────────────────────────
 MAX_REQUESTS_PER_SESSION: int = int(
-    os.getenv("NEURALGTO_MAX_SESSION_REQUESTS", "20")
+    os.getenv("NEURALGTO_MAX_SESSION_REQUESTS", "10")
 )
 MAX_REQUESTS_PER_HOUR_GLOBAL: int = int(
-    os.getenv("NEURALGTO_MAX_HOURLY_REQUESTS", "100")
+    os.getenv("NEURALGTO_MAX_HOURLY_REQUESTS", "30")
 )
 MAX_REQUESTS_PER_DAY: int = int(
-    os.getenv("NEURALGTO_MAX_DAILY_REQUESTS", "500")
+    os.getenv("NEURALGTO_MAX_DAILY_REQUESTS", "50")
 )
 REQUEST_COOLDOWN_SECONDS: int = int(
     os.getenv("NEURALGTO_COOLDOWN_SECONDS", "5")
@@ -64,6 +65,9 @@ _DAILY_USAGE_FILE = _STORAGE_DIR / "daily_usage.json"
 # ──────────────────────────────────────────────
 _lock = threading.Lock()
 
+# Maximum distinct IPs/sessions tracked in memory (T6: prevent memory exhaustion)
+_MAX_TRACKED_KEYS: int = 10_000
+
 # session_id → list of timestamps
 _session_timestamps: dict[str, list[float]] = defaultdict(list)
 
@@ -75,6 +79,30 @@ _global_timestamps: list[float] = []
 
 # session_id → list of recent queries (for duplicate detection)
 _session_recent_queries: dict[str, list[str]] = defaultdict(list)
+
+
+def _evict_stale_keys() -> None:
+    """Evict oldest entries when in-memory dicts exceed ``_MAX_TRACKED_KEYS``.
+
+    Called under ``_lock``. Removes the 20% oldest entries by last-seen
+    timestamp so we don't do this on every single request.
+    """
+    if len(_session_timestamps) <= _MAX_TRACKED_KEYS:
+        return
+
+    # Build a last-seen timestamp per key
+    last_seen: dict[str, float] = {}
+    for key, ts_list in _session_timestamps.items():
+        last_seen[key] = max(ts_list) if ts_list else 0.0
+
+    # Sort by last-seen ascending → evict oldest 20%
+    evict_count = len(last_seen) // 5
+    to_evict = sorted(last_seen, key=last_seen.get)[:evict_count]
+
+    for key in to_evict:
+        _session_timestamps.pop(key, None)
+        _session_last_request.pop(key, None)
+        _session_recent_queries.pop(key, None)
 
 # Injection / prompt-attack patterns (compiled once)
 _INJECTION_PATTERNS: list[re.Pattern[str]] = [
@@ -121,6 +149,9 @@ def check_rate_limit(
     cutoff = now - window_seconds
 
     with _lock:
+        # T6: Evict stale entries if we're tracking too many IPs
+        _evict_stale_keys()
+
         ts = _session_timestamps[session_id]
         # Prune old entries
         _session_timestamps[session_id] = ts = [t for t in ts if t > cutoff]
@@ -390,3 +421,149 @@ def detect_abuse(
             return True, "Requests are being sent too rapidly."
 
     return False, ""
+
+
+# ──────────────────────────────────────────────
+# 7. Anonymous (IP-based) usage tracking
+# ──────────────────────────────────────────────
+# Anonymous users get a small daily allowance keyed on IP.
+# Persisted to disk so it survives page refreshes AND process restarts.
+
+ANON_DAILY_LIMIT: int = int(os.getenv("NEURALGTO_ANON_DAILY_LIMIT", "3"))
+_ANON_USAGE_FILE = _STORAGE_DIR / "anon_usage.json"
+
+# In-memory cache (avoids re-reading disk every request within same process)
+_anon_usage_cache: dict[str, int] = {}
+_anon_usage_date: str = ""
+
+
+# Basic IP format validation (IPv4, IPv6, or short fingerprint)
+_IP_PATTERN = re.compile(
+    r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"    # IPv4
+    r"|[0-9a-fA-F:]{3,45}"                         # IPv6
+    r"|fp-[0-9a-f]{16})$"                           # fingerprint fallback
+)
+
+
+def _sanitize_ip(raw: str) -> str | None:
+    """Validate and sanitize an IP address string.
+
+    Returns the cleaned IP if it looks valid, or None if spoofed/malformed.
+    Strips whitespace and rejects strings that don't match IP patterns
+    (prevents header injection via X-Forwarded-For).
+    """
+    cleaned = raw.strip()[:64]  # hard length cap
+    if _IP_PATTERN.match(cleaned):
+        return cleaned
+    return None
+
+
+def get_client_ip() -> str:
+    """Extract client IP from Streamlit request context.
+
+    Uses ``X-Forwarded-For`` header (set by reverse proxies on Streamlit
+    Cloud, nginx, etc.) with fallbacks to ``X-Real-Ip`` and a User-Agent
+    fingerprint hash for local dev.
+
+    The extracted IP is validated against a basic format pattern to
+    mitigate header-injection attacks.
+
+    Returns:
+        Client identifier string.  Never raises.
+    """
+    try:
+        import streamlit as st  # noqa: E402 — lazy for non-Streamlit use
+
+        headers = st.context.headers
+        # X-Forwarded-For: first entry is the original client
+        forwarded = headers.get("X-Forwarded-For", "")
+        if forwarded:
+            candidate = forwarded.split(",")[0].strip()
+            ip = _sanitize_ip(candidate)
+            if ip:
+                return ip
+        real_ip = headers.get("X-Real-Ip", "")
+        if real_ip:
+            ip = _sanitize_ip(real_ip)
+            if ip:
+                return ip
+        # Weak fingerprint fallback (local dev with no reverse proxy)
+        ua = headers.get("User-Agent", "unknown")
+        return f"fp-{hashlib.sha256(ua.encode()).hexdigest()[:16]}"
+    except Exception:
+        return "unknown"
+
+
+def _load_anon_usage() -> dict[str, int]:
+    """Load today's anonymous usage counters from disk.
+
+    Returns:
+        ``{client_ip: count, ...}`` for today, or empty dict.
+    """
+    today = _today_key()
+    try:
+        if _ANON_USAGE_FILE.exists():
+            data = json.loads(_ANON_USAGE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("date") == today:
+                return data.get("usage", {})
+    except Exception:
+        pass
+    return {}
+
+
+def _save_anon_usage(usage: dict[str, int]) -> None:
+    """Persist anonymous usage counters to disk."""
+    try:
+        _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        _ANON_USAGE_FILE.write_text(
+            json.dumps({"date": _today_key(), "usage": usage}, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        if config.DEBUG:
+            import traceback
+
+            traceback.print_exc()
+
+
+def check_anon_limit(client_ip: str) -> tuple[bool, int]:
+    """Check whether an anonymous client has remaining free uses today.
+
+    Tracks usage by IP address (or fingerprint), persisted to disk so it
+    survives page refreshes and short process restarts.
+
+    Args:
+        client_ip: Client identifier from ``get_client_ip()``.
+
+    Returns:
+        ``(allowed, remaining)`` — *allowed* is True if under limit.
+    """
+    global _anon_usage_cache, _anon_usage_date
+    today = _today_key()
+
+    with _lock:
+        if _anon_usage_date != today:
+            _anon_usage_cache = _load_anon_usage()
+            _anon_usage_date = today
+
+        count = _anon_usage_cache.get(client_ip, 0)
+        remaining = max(ANON_DAILY_LIMIT - count, 0)
+        return count < ANON_DAILY_LIMIT, remaining
+
+
+def record_anon_use(client_ip: str) -> None:
+    """Record one anonymous usage for an IP.  Persists to disk.
+
+    Args:
+        client_ip: Client identifier from ``get_client_ip()``.
+    """
+    global _anon_usage_cache, _anon_usage_date
+    today = _today_key()
+
+    with _lock:
+        if _anon_usage_date != today:
+            _anon_usage_cache = _load_anon_usage()
+            _anon_usage_date = today
+
+        _anon_usage_cache[client_ip] = _anon_usage_cache.get(client_ip, 0) + 1
+        _save_anon_usage(_anon_usage_cache)

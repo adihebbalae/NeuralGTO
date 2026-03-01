@@ -224,6 +224,9 @@ def _ensure_cached(split: str) -> Path:
         return local_path
 
     url = _HF_BASE + _FILES[split]
+    # SECURITY: Reject non-HTTPS schemes (prevents file:// local file reads)
+    if not url.startswith("https://"):
+        raise ValueError(f"Only HTTPS URLs are allowed, got: {url}")
     logger.info("Downloading PokerBench %s test set from %s ...", split, url)
 
     req = urllib.request.Request(url, headers={"User-Agent": "NeuralGTO/1.0"})

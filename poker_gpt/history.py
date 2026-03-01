@@ -11,6 +11,10 @@ DOCUMENTATION:
     History is stored at ``~/.neuralgto/history.jsonl`` (one JSON object
     per line).  The directory is created automatically on first write.
 
+    The file is capped at ``_MAX_HISTORY_ENTRIES`` (default 500) to
+    prevent unbounded disk growth.  When the cap is exceeded, the oldest
+    entries are pruned on the next write.
+
     Functions:
         log_query()       — append a single analysis result
         get_history()     — read the last *N* entries
@@ -22,6 +26,7 @@ DOCUMENTATION:
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -30,10 +35,11 @@ from poker_gpt import config
 
 
 # ──────────────────────────────────────────────
-# History file location
+# History file location & limits
 # ──────────────────────────────────────────────
 _HISTORY_DIR = Path.home() / ".neuralgto"
 _HISTORY_FILE = _HISTORY_DIR / "history.jsonl"
+_MAX_HISTORY_ENTRIES: int = int(os.getenv("NEURALGTO_MAX_HISTORY_ENTRIES", "500"))
 
 
 def get_history_path() -> Path:
@@ -91,9 +97,35 @@ def log_query(
         _ensure_history_dir()
         with open(_HISTORY_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        # Prevent unbounded growth: truncate to last _MAX_HISTORY_ENTRIES
+        _truncate_history_if_needed()
     except Exception as exc:
         if config.DEBUG:
             print(f"[history] Failed to log query: {exc}")
+
+
+def _truncate_history_if_needed() -> None:
+    """Truncate history file to ``_MAX_HISTORY_ENTRIES`` most-recent entries.
+
+    Called after every write.  Reads the file, keeps only the tail,
+    and rewrites atomically.  Silently swallows errors.
+    """
+    try:
+        if not _HISTORY_FILE.exists():
+            return
+        lines = _HISTORY_FILE.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= _MAX_HISTORY_ENTRIES:
+            return
+        # Keep the most recent entries
+        trimmed = lines[-_MAX_HISTORY_ENTRIES:]
+        _HISTORY_FILE.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
+        if config.DEBUG:
+            print(
+                f"[history] Truncated {len(lines)} → {len(trimmed)} entries"
+            )
+    except Exception:
+        pass  # never crash on housekeeping
 
 
 def get_history(limit: int = 50) -> list[dict]:

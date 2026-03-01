@@ -68,6 +68,19 @@ def run_solver(input_file: Path = None, timeout: int = None) -> Path | None:
     input_file = Path(input_file)
     binary_path = Path(config.SOLVER_BINARY_PATH)
     resources_path = Path(config.SOLVER_RESOURCES_PATH)
+
+    # SECURITY: Verify solver binary is within the expected solver_bin/ directory
+    # Prevents arbitrary binary execution via SOLVER_BINARY_PATH env var manipulation
+    _project_root = Path(__file__).parent.parent
+    _allowed_solver_dir = _project_root / "solver_bin"
+    try:
+        binary_path.resolve().relative_to(_allowed_solver_dir.resolve())
+    except ValueError:
+        print(
+            f"[SOLVER_RUNNER] SECURITY: Solver binary path ({binary_path}) "
+            f"is outside the allowed directory ({_allowed_solver_dir}). Refusing to execute."
+        )
+        return None
     
     # Check if solver binary exists
     if not binary_path.exists():

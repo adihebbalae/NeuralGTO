@@ -44,7 +44,10 @@ Examples:
     )
     parser.add_argument(
         "--mode",
-        choices=["gemini_direct", "neuralgto_fast", "neuralgto_lookup"],
+        choices=[
+            "gemini_direct", "neuralgto_fast",
+            "neuralgto_lookup", "neuralgto_pairwise",
+        ],
         default="neuralgto_lookup",
         help="Evaluation mode (default: neuralgto_lookup)",
     )

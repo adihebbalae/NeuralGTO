@@ -112,3 +112,20 @@ class StrategyResult:
 
     # Whether this came from the solver or the fallback
     source: str = "solver"       # "solver" or "gpt_fallback"
+
+
+@dataclass
+class PruningDecision:
+    """
+    Output of LLM-guided tree pruning (T4.2a).
+
+    Represents the LLM's recommendation for which bet sizes to keep vs. prune
+    from a solver's action tree, based on partial CFR convergence signals
+    plus semantic poker reasoning.
+    """
+    keep_sizes: list[str]        # Bet sizes to keep, e.g. ["BET 67", "CHECK"]
+    prune_sizes: list[str]       # Bet sizes to remove, e.g. ["BET 150", "BET 33"]
+    reasoning: str               # LLM's natural language explanation
+    warm_iterations: int = 0     # How many CFR iterations were used for warm-stop
+    board: str = ""              # Board context, e.g. "Kc-Qc-2h"
+    metadata: dict = None        # Optional extra info (parse method, etc.)

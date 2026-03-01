@@ -1,0 +1,8 @@
+# Minimal requirements for running experiments on ECE LRC (no GUI/web UI needed)
+# Install with: pip install -r requirements_ece.txt
+#
+# Full requirements.txt also works but pulls in streamlit which is unnecessary on headless servers.
+
+google-genai>=1.0.0
+python-dotenv>=1.0.0
+httpx>=0.27.0

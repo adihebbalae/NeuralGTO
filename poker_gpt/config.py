@@ -62,7 +62,7 @@ SOLVER_BINARY_PATH = os.getenv(
 # Path to the TexasSolver resources directory (contains compairer data)
 SOLVER_RESOURCES_PATH = os.getenv(
     "SOLVER_RESOURCES_PATH",
-    str(_PROJECT_ROOT / "solver_bin" / "TexasSolver-v0.2.0-Windows" / "resources")
+    str(_PROJECT_ROOT / "solver_bin" / f"TexasSolver-v0.2.0-{_SOLVER_DIR_SUFFIX}" / "resources")
 )
 
 # Solver mode: "holdem" or "shortdeck"
@@ -88,6 +88,16 @@ SOLVER_TIMEOUT = int(os.getenv("SOLVER_TIMEOUT", "300"))  # 5 minutes max
 WORK_DIR = _PROJECT_ROOT / "poker_gpt" / "_work"
 SOLVER_INPUT_FILE = WORK_DIR / "solver_input.txt"
 SOLVER_OUTPUT_FILE = WORK_DIR / "output_result.json"
+
+# ──────────────────────────────────────────────
+# LLM Provider Configuration
+# ──────────────────────────────────────────────
+# "gemini" (default, uses Gemini API) or "local" (uses Ollama or compatible endpoint)
+LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")
+
+# Local LLM settings (used when LLM_PROVIDER="local")
+LOCAL_LLM_ENDPOINT: str = os.getenv("LOCAL_LLM_ENDPOINT", "http://localhost:11434/api/generate")
+LOCAL_LLM_MODEL: str = os.getenv("LOCAL_LLM_MODEL", "qwen2.5:14b")
 
 # ──────────────────────────────────────────────
 # Feature Flags

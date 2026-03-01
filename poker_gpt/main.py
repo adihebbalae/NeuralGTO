@@ -58,7 +58,7 @@ from poker_gpt.nl_parser import parse_scenario
 from poker_gpt.solver_input import generate_solver_input
 from poker_gpt.solver_runner import run_solver, is_solver_available
 from poker_gpt.strategy_extractor import extract_strategy
-from poker_gpt.nl_advisor import generate_advice, generate_fallback_advice
+from poker_gpt.nl_advisor import generate_advice, generate_fallback_advice, OUTPUT_LEVELS
 from poker_gpt.sanity_checker import check_strategy_sanity
 from poker_gpt.cache import compute_cache_key, cache_lookup, cache_store
 from poker_gpt.preflop_lookup import lookup_preflop_strategy, is_preflop_lookup_available
@@ -135,6 +135,7 @@ def analyze_hand(
     mode: str = "default",
     on_status: Optional[Callable[[str], None]] = None,
     opponent_notes: str = "",
+    output_level: str = "advanced",
 ) -> dict:
     """
     Core analysis function — used by both CLI and web UI.
@@ -148,10 +149,12 @@ def analyze_hand(
         on_status: Optional callback for progress updates (e.g., for web UI).
         opponent_notes: Optional description of villain tendencies used to
             produce an exploitative deviation from the GTO baseline.
+        output_level: "beginner" for plain-language output or "advanced"
+            for the full 4-section GTO analysis. Default: "advanced".
         
     Returns:
         dict with keys: advice, mode, scenario, strategy, sanity_note,
-        cached, solve_time, source.
+        cached, solve_time, source, output_level.
     """
     def _status(msg: str):
         if on_status:
@@ -185,6 +188,7 @@ def analyze_hand(
             "confidence": "low",
             "parse_time": 0.0,
             "spot_frequency": None,
+            "output_level": output_level,
         }
 
     # ── Step 1: Parse natural language → structured scenario ──
@@ -215,6 +219,7 @@ def analyze_hand(
             "confidence": "low",
             "parse_time": parse_time,
             "spot_frequency": None,
+            "output_level": output_level,
         }
 
     # ── Check if we should use the solver ──
@@ -256,6 +261,7 @@ def analyze_hand(
                 query, scenario, preflop_strategy,
                 opponent_notes=opponent_notes,
                 spot_frequency_text=spot_freq_text,
+                output_level=output_level,
             )
             _status(f"  \u2713 Generated in {time.time()-t_adv:.1f}s")
             source = "preflop_lookup"
@@ -271,6 +277,7 @@ def analyze_hand(
                 "confidence": _CONFIDENCE_MAP.get(source, "low"),
                 "parse_time": parse_time,
                 "spot_frequency": spot_freq_info,
+                "output_level": output_level,
             }
         else:
             _status("  No exact preflop match — falling back to LLM mode")
@@ -279,7 +286,7 @@ def analyze_hand(
         # ── Fast / LLM-only mode ──
         _status("Generating GTO-approximate advice via Gemini (LLM-only)...")
         t1 = time.time()
-        advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
+        advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes, output_level=output_level)
         source = "llm_only"
         _status(f"  ✓ Generated in {time.time()-t1:.1f}s")
         return {
@@ -294,6 +301,7 @@ def analyze_hand(
             "confidence": _CONFIDENCE_MAP.get(source, "low"),
             "parse_time": parse_time,
             "spot_frequency": spot_freq_info,
+            "output_level": output_level,
         }
 
     # ── Step 2: Generate solver input file (with mode-specific settings) ──
@@ -327,7 +335,7 @@ def analyze_hand(
         except RuntimeError as e:
             _status(f"  ✗ Solver failed: {e}")
             _status("  Falling back to LLM-only mode...")
-            advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
+            advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes, output_level=output_level)
             source = "llm_fallback"
             return {
                 "advice": advice,
@@ -341,11 +349,12 @@ def analyze_hand(
                 "confidence": _CONFIDENCE_MAP.get(source, "low"),
                 "parse_time": parse_time,
                 "spot_frequency": spot_freq_info,
+                "output_level": output_level,
             }
 
         if output_file is None:
             _status("  Solver unavailable — falling back to LLM-only...")
-            advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
+            advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes, output_level=output_level)
             source = "llm_fallback"
             return {
                 "advice": advice,
@@ -359,6 +368,7 @@ def analyze_hand(
                 "confidence": _CONFIDENCE_MAP.get(source, "low"),
                 "parse_time": parse_time,
                 "spot_frequency": spot_freq_info,
+                "output_level": output_level,
             }
 
         solve_time = time.time() - t2
@@ -380,7 +390,7 @@ def analyze_hand(
     except (ValueError, KeyError) as e:
         _status(f"  ✗ Strategy extraction failed: {e}")
         _status("  Falling back to LLM-only mode...")
-        advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes)
+        advice = generate_fallback_advice(query, scenario, opponent_notes=opponent_notes, output_level=output_level)
         source = "llm_fallback"
         return {
             "advice": advice,
@@ -394,6 +404,7 @@ def analyze_hand(
             "confidence": _CONFIDENCE_MAP.get(source, "low"),
             "parse_time": parse_time,
             "spot_frequency": spot_freq_info,
+            "output_level": output_level,
         }
 
     # ── Step 4.5: Sanity check extreme frequencies ──
@@ -417,6 +428,7 @@ def analyze_hand(
         sanity_note=sanity_note,
         opponent_notes=opponent_notes,
         spot_frequency_text=spot_freq_text,
+        output_level=output_level,
     )
     _status(f"  ✓ Generated in {time.time()-t4:.1f}s")
 
@@ -433,6 +445,7 @@ def analyze_hand(
         "confidence": _CONFIDENCE_MAP.get(source, "low"),
         "parse_time": parse_time,
         "spot_frequency": spot_freq_info,
+        "output_level": output_level,
     }
 
 
@@ -444,6 +457,7 @@ def run_pipeline(
     user_input: str,
     mode: str = "default",
     opponent_notes: str = "",
+    output_level: str = "advanced",
 ) -> dict:
     """
     Run the full PokerGPT pipeline with CLI-friendly output.
@@ -452,6 +466,7 @@ def run_pipeline(
         user_input: Natural language poker question.
         mode: "fast", "default", or "pro".
         opponent_notes: Optional villain tendency description.
+        output_level: "beginner" or "advanced".
         
     Returns:
         Full result dict from analyze_hand().
@@ -470,6 +485,7 @@ def run_pipeline(
         mode=mode,
         on_status=_status,
         opponent_notes=opponent_notes,
+        output_level=output_level,
     )
     return result
 
@@ -732,6 +748,7 @@ def _fill_gaps_interactive(query: str) -> Optional[str]:
 def interactive_mode(
     default_mode: str = "default",
     default_opponent_notes: str = "",
+    default_output_level: str = "advanced",
 ):
     """Run PokerGPT in interactive mode (REPL)."""
     print("=" * 60)
@@ -753,11 +770,13 @@ def interactive_mode(
     print(f"\n  Solver: {solver_status}")
     print(f"  Model: {config.GEMINI_MODEL}")
     print(f"  Mode: {default_mode}")
+    print(f"  Output level: {default_output_level}")
     if default_opponent_notes:
         print(f"  Villain profile: {default_opponent_notes}")
     print(f"\nDescribe your poker hand and I'll give you GTO advice.")
     print("Type 'quit' or 'exit' to stop.")
     print("Type 'mode fast/default/pro' to change mode.")
+    print("Type 'level beginner/advanced' to change output level.")
     print("Type 'opponent <description>' to set villain tendencies (e.g. 'opponent calling station').")
     print("Type 'opponent clear' to remove villain tendencies.")
     print("Type 'pool <description>' to set live game pool tendencies for session prep.")
@@ -768,6 +787,7 @@ def interactive_mode(
     current_mode = default_mode
     current_opponent_notes = default_opponent_notes
     current_pool_notes = ""
+    current_output_level = default_output_level
     
     while True:
         try:
@@ -790,6 +810,21 @@ def interactive_mode(
                 print(f"  → Switched to {current_mode} mode: {config.MODE_PRESETS[current_mode]['description']}")
             else:
                 print(f"  Unknown mode '{new_mode}'. Use: fast, default, pro")
+            continue
+
+        # Output level switching
+        if user_input.lower().startswith("level "):
+            new_level = user_input.split(" ", 1)[1].strip().lower()
+            if new_level in OUTPUT_LEVELS:
+                current_output_level = new_level
+                desc = (
+                    "Plain-language coaching — no jargon"
+                    if new_level == "beginner"
+                    else "Full GTO analysis with frequencies and range logic"
+                )
+                print(f"  → Output level: {current_output_level} — {desc}")
+            else:
+                print(f"  Unknown level '{new_level}'. Use: beginner, advanced")
             continue
 
         # Villain tendency setting
@@ -856,6 +891,7 @@ def interactive_mode(
                 opponent_notes=_combine_opponent_pool_notes(
                     current_opponent_notes, current_pool_notes
                 ),
+                output_level=current_output_level,
             )
             _display_result(
                 result,
@@ -876,6 +912,7 @@ def _handle_import_hh(
     hero_name: str,
     mode: str = "default",
     opponent_notes: str = "",
+    output_level: str = "advanced",
 ) -> None:
     """
     Import a hand history file, let user pick a hand, and analyze it.
@@ -885,6 +922,7 @@ def _handle_import_hh(
         hero_name: Hero's player name (empty = auto-detect).
         mode: Analysis mode.
         opponent_notes: Villain tendency description.
+        output_level: "beginner" or "advanced".
     """
     import os
     if not os.path.isfile(filepath):
@@ -925,7 +963,7 @@ def _handle_import_hh(
     print(f"\n  Query: {query}\n")
 
     try:
-        result = run_pipeline(query, mode=mode, opponent_notes=opponent_notes)
+        result = run_pipeline(query, mode=mode, opponent_notes=opponent_notes, output_level=output_level)
         _display_result(result, opponent_notes=opponent_notes)
         log_query(result, query, opponent_notes=opponent_notes)
     except Exception as e:
@@ -950,6 +988,7 @@ Examples:
   python -m poker_gpt.main --opponent "calling station, never folds" --query "I have QQ on BTN..."
   python -m poker_gpt.main --opponent "aggressive, raises every street" --query "..."
   python -m poker_gpt.main --pool "live 1/2, pool underbluffs, rarely value bets thin" --query "..."
+  python -m poker_gpt.main --level beginner --query "I have QQ on the BTN..."
         """,
     )
     parser.add_argument(
@@ -977,6 +1016,25 @@ Examples:
             'Describe villain tendencies in plain English. Used to adjust the '
             'GTO recommendation exploitatively. '
             'Example: --opponent "calling station, never folds to bets"'
+        ),
+    )
+    parser.add_argument(
+        "--pool",
+        type=str,
+        default=None,
+        help=(
+            'Describe overall player-pool tendencies for session prep. '
+            'Example: --pool "live 1/2, pool underbluffs, fit-or-fold postflop"'
+        ),
+    )
+    parser.add_argument(
+        "--level", "-l",
+        type=str,
+        choices=["beginner", "advanced"],
+        default="advanced",
+        help=(
+            "Output level: beginner (plain-language coaching, no jargon) "
+            "or advanced (full GTO analysis with frequencies)"
         ),
     )
     parser.add_argument(
@@ -1039,6 +1097,7 @@ Examples:
     
     opponent_notes = args.opponent or ""
     pool_notes = args.pool or ""
+    output_level = args.level
     combined_notes = _combine_opponent_pool_notes(opponent_notes, pool_notes)
 
     if args.import_hh:
@@ -1048,15 +1107,16 @@ Examples:
             hero_name=args.hero_name,
             mode=mode,
             opponent_notes=combined_notes,
+            output_level=output_level,
         )
     elif args.query:
         # Single query mode
-        result = run_pipeline(args.query, mode=mode, opponent_notes=combined_notes)
+        result = run_pipeline(args.query, mode=mode, opponent_notes=combined_notes, output_level=output_level)
         _display_result(result, opponent_notes=opponent_notes, pool_notes=pool_notes)
         log_query(result, args.query, opponent_notes=combined_notes)
     else:
         # Interactive mode
-        interactive_mode(default_mode=mode, default_opponent_notes=opponent_notes)
+        interactive_mode(default_mode=mode, default_opponent_notes=opponent_notes, default_output_level=output_level)
 
 
 if __name__ == "__main__":

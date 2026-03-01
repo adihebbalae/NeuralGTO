@@ -28,6 +28,7 @@ from poker_gpt.main import analyze_hand, get_source_badge
 from poker_gpt.solver_runner import is_solver_available
 from poker_gpt.cache import get_cache_stats, clear_cache
 from poker_gpt.hand_history import parse_hand_history, hand_to_query, hands_summary
+from poker_gpt.quiz import score_user_action, generate_quiz_feedback, QuizScore
 from poker_gpt import config
 from poker_gpt.security import (
     check_rate_limit,
@@ -196,6 +197,26 @@ with st.sidebar:
                     st.error(msg)
 
     st.divider()
+    st.markdown("### 🎓 Output Level")
+    output_level = st.radio(
+        "Output level",
+        options=["advanced", "beginner"],
+        index=0,
+        horizontal=True,
+        label_visibility="collapsed",
+        help=(
+            "**Advanced:** Full GTO analysis with frequencies, range logic, "
+            "blocker effects, and mixed strategy resolution.\n\n"
+            "**Beginner:** One clear action with plain-language reasoning. "
+            "No jargon, no percentages — just what to do and why."
+        ),
+    )
+    if output_level == "beginner":
+        st.caption("Plain-language coaching — no jargon.")
+    else:
+        st.caption("Full GTO breakdown with frequencies.")
+
+    st.divider()
     st.markdown("""
 ### Mode Details
 
@@ -218,6 +239,31 @@ st.caption("Neuro-Symbolic Poker Advisor — Powered by TexasSolver + Google Gem
 
 
 # ──────────────────────────────────────────────
+# App Mode Toggle — Analyzer vs Quiz
+# ──────────────────────────────────────────────
+app_mode = st.radio(
+    "App mode",
+    options=["🎯 Analyzer", "🧠 Quiz Mode"],
+    horizontal=True,
+    label_visibility="collapsed",
+    help=(
+        "**Analyzer:** Get full GTO advice on any poker spot.\n\n"
+        "**Quiz Mode:** Test yourself! Describe a spot, guess the action, "
+        "then see how your decision compares to GTO."
+    ),
+)
+_is_quiz = app_mode.startswith("🧠")
+
+# Initialize quiz session state
+if "quiz_state" not in st.session_state:
+    st.session_state["quiz_state"] = "idle"       # idle → guessing → revealed
+    st.session_state["quiz_result"] = None         # analyze_hand result (hidden)
+    st.session_state["quiz_score"] = None          # QuizScore object
+    st.session_state["quiz_feedback"] = None       # LLM coaching text
+    st.session_state["quiz_history"] = []          # list of past quiz scores
+
+
+# ──────────────────────────────────────────────
 # Example queries (quick-start)
 # ──────────────────────────────────────────────
 EXAMPLES = [
@@ -226,105 +272,292 @@ EXAMPLES = [
     "I hold 87s on the BB, SB opens to 3bb. Flop is 6h 5d 2c, SB bets 2bb into 6bb pot.",
 ]
 
-with st.expander("💡 Example hands (click to try)"):
-    for ex in EXAMPLES:
-        if st.button(ex, key=f"ex_{hash(ex)}", use_container_width=True):
-            st.session_state["query"] = ex
+if not _is_quiz:
+    with st.expander("💡 Example hands (click to try)"):
+        for ex in EXAMPLES:
+            if st.button(ex, key=f"ex_{hash(ex)}", use_container_width=True):
+                st.session_state["query"] = ex
+else:
+    with st.expander("💡 Quiz examples — try these spots"):
+        for ex in EXAMPLES:
+            if st.button(ex, key=f"qex_{hash(ex)}", use_container_width=True):
+                st.session_state["query"] = ex
+                st.session_state["quiz_state"] = "idle"
 
 
 # ──────────────────────────────────────────────
-# Hand History Import
+# Hand History Import (Analyzer only)
 # ──────────────────────────────────────────────
-with st.expander("📂 Import Hand History"):
-    hh_file = st.file_uploader(
-        "Upload a hand history file (.txt)",
-        type=["txt", "log", "csv"],
-        key="hh_upload",
-    )
-    hh_hero = st.text_input(
-        "Hero name (leave blank to auto-detect):",
-        value="",
-        key="hh_hero",
-    )
-    if hh_file is not None:
-        try:
-            hh_text = hh_file.read().decode("utf-8", errors="replace")
-            hh_hands = parse_hand_history(hh_text, hero_name=hh_hero)
-            if not hh_hands:
-                st.warning("No parseable hands found in file.")
-            else:
-                summaries = hands_summary(hh_hands)
-                chosen = st.selectbox(
-                    f"Select a hand ({len(hh_hands)} found):",
-                    options=list(range(len(summaries))),
-                    format_func=lambda i: summaries[i],
-                    key="hh_select",
-                )
-                if st.button("Use this hand", key="hh_use"):
-                    st.session_state["query"] = hand_to_query(hh_hands[chosen])
-                    st.rerun()
-        except Exception as e:
-            st.error(f"Error parsing hand history: {e}")
+if not _is_quiz:
+    with st.expander("📂 Import Hand History"):
+        hh_file = st.file_uploader(
+            "Upload a hand history file (.txt)",
+            type=["txt", "log", "csv"],
+            key="hh_upload",
+        )
+        hh_hero = st.text_input(
+            "Hero name (leave blank to auto-detect):",
+            value="",
+            key="hh_hero",
+        )
+        if hh_file is not None:
+            try:
+                hh_text = hh_file.read().decode("utf-8", errors="replace")
+                hh_hands = parse_hand_history(hh_text, hero_name=hh_hero)
+                if not hh_hands:
+                    st.warning("No parseable hands found in file.")
+                else:
+                    summaries = hands_summary(hh_hands)
+                    chosen = st.selectbox(
+                        f"Select a hand ({len(hh_hands)} found):",
+                        options=list(range(len(summaries))),
+                        format_func=lambda i: summaries[i],
+                        key="hh_select",
+                    )
+                    if st.button("Use this hand", key="hh_use"):
+                        st.session_state["query"] = hand_to_query(hh_hands[chosen])
+                        st.rerun()
+            except Exception as e:
+                st.error(f"Error parsing hand history: {e}")
 
 
 # ──────────────────────────────────────────────
 # Input Section
 # ──────────────────────────────────────────────
 query = st.text_area(
-    "🃏 Describe your poker hand:",
+    "🃏 Describe your poker hand:" if not _is_quiz else "🧠 Describe a poker spot to quiz yourself:",
     value=st.session_state.get("query", ""),
     placeholder="Example: I have QQ on the button, the flop is Ts 9d 4h, "
                 "villain checks to me. Pot is 20bb, stacks are 90bb.",
     height=120,
 )
 
-# Mode selection — three columns with buttons
-st.markdown("**Choose analysis mode:**")
-col1, col2, col3 = st.columns(3)
+if not _is_quiz:
+    # ──────────────────────────────────────────
+    # ANALYZER MODE — mode selection + notes
+    # ──────────────────────────────────────────
+    st.markdown("**Choose analysis mode:**")
+    col1, col2, col3 = st.columns(3)
 
-opponent_notes = st.text_input(
-    "🎭 Villain tendencies (optional — for exploitative advice):",
-    value=st.session_state.get("opponent_notes", ""),
-    placeholder=(
-        "e.g. 'calling station, never folds' · 'aggro, raises every street' · "
-        "'nit, folds too much to bets'"
-    ),
-    help=(
-        "Describe what you know about this villain. NeuralGTO will use GTO as the "
-        "baseline and reason about whether to deviate based on these tendencies. "
-        "Leave blank for pure GTO advice."
-    ),
-)
-if opponent_notes != st.session_state.get("opponent_notes", ""):
-    st.session_state["opponent_notes"] = opponent_notes
+    opponent_notes = st.text_input(
+        "🎭 Villain tendencies (optional — for exploitative advice):",
+        value=st.session_state.get("opponent_notes", ""),
+        placeholder=(
+            "e.g. 'calling station, never folds' · 'aggro, raises every street' · "
+            "'nit, folds too much to bets'"
+        ),
+        help=(
+            "Describe what you know about this villain. NeuralGTO will use GTO as the "
+            "baseline and reason about whether to deviate based on these tendencies. "
+            "Leave blank for pure GTO advice."
+        ),
+    )
+    if opponent_notes != st.session_state.get("opponent_notes", ""):
+        st.session_state["opponent_notes"] = opponent_notes
 
-pool_notes = st.text_input(
-    "🎰 Pool tendencies — Live Game Prep (optional):",
-    value=st.session_state.get("pool_notes", ""),
-    placeholder=(
-        "e.g. 'live 1/2, pool underbluffs, rarely value bets thin, "
-        "overcalls preflop, fit-or-fold postflop'"
-    ),
-    help=(
-        "Describe the overall pool tendencies at your game (not a specific villain). "
-        "NeuralGTO will generate session-wide exploitative adjustments — "
-        "e.g., 'against this pool, widen your value betting range and cut bluffs.' "
-        "Great for pre-session prep at live cash games."
-    ),
-)
-if pool_notes != st.session_state.get("pool_notes", ""):
-    st.session_state["pool_notes"] = pool_notes
+    pool_notes = st.text_input(
+        "🎰 Pool tendencies — Live Game Prep (optional):",
+        value=st.session_state.get("pool_notes", ""),
+        placeholder=(
+            "e.g. 'live 1/2, pool underbluffs, rarely value bets thin, "
+            "overcalls preflop, fit-or-fold postflop'"
+        ),
+        help=(
+            "Describe the overall pool tendencies at your game (not a specific villain). "
+            "NeuralGTO will generate session-wide exploitative adjustments — "
+            "e.g., 'against this pool, widen your value betting range and cut bluffs.' "
+            "Great for pre-session prep at live cash games."
+        ),
+    )
+    if pool_notes != st.session_state.get("pool_notes", ""):
+        st.session_state["pool_notes"] = pool_notes
 
-mode = None
-with col1:
-    if st.button("⚡ Fast\n\nLLM-only · ~10s", use_container_width=True):
-        mode = "fast"
-with col2:
-    if st.button("🎯 Default\n\nSolver · ~1-2 min", use_container_width=True, type="primary"):
-        mode = "default"
-with col3:
-    if st.button("🏆 Pro\n\nHigh accuracy · ~4-6 min", use_container_width=True):
-        mode = "pro"
+    mode = None
+    with col1:
+        if st.button("⚡ Fast\n\nLLM-only · ~10s", use_container_width=True):
+            mode = "fast"
+    with col2:
+        if st.button("🎯 Default\n\nSolver · ~1-2 min", use_container_width=True, type="primary"):
+            mode = "default"
+    with col3:
+        if st.button("🏆 Pro\n\nHigh accuracy · ~4-6 min", use_container_width=True):
+            mode = "pro"
+else:
+    # ──────────────────────────────────────────
+    # QUIZ MODE — quiz controls
+    # ──────────────────────────────────────────
+    opponent_notes = ""
+    pool_notes = ""
+    mode = None
+
+    quiz_state = st.session_state.get("quiz_state", "idle")
+
+    if quiz_state == "idle":
+        st.markdown("**Choose quiz difficulty:**")
+        qcol1, qcol2 = st.columns(2)
+        with qcol1:
+            if st.button("⚡ Quick Quiz\n\nLLM-only", use_container_width=True):
+                mode = "fast"
+                st.session_state["quiz_mode_used"] = "fast"
+        with qcol2:
+            if st.button("🎯 Solver Quiz\n\nGTO-verified", use_container_width=True, type="primary"):
+                mode = "default"
+                st.session_state["quiz_mode_used"] = "default"
+
+    elif quiz_state == "guessing":
+        # Show scenario metrics but hide strategy/advice
+        qr = st.session_state.get("quiz_result")
+        if qr and qr.get("scenario"):
+            scenario = qr["scenario"]
+            st.divider()
+            st.subheader("📋 The Spot")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Hand", scenario.hero_hand)
+            m2.metric("Board", scenario.board.replace(",", " ") if scenario.board else "Preflop")
+            m3.metric("Pot", f"{scenario.pot_size_bb:.0f}bb")
+            m4.metric("Stack", f"{scenario.effective_stack_bb:.0f}bb")
+
+            pos_label = scenario.hero_position
+            if scenario.hero_is_ip:
+                pos_label += " (IP)"
+            else:
+                pos_label += " (OOP)"
+            st.markdown(f"**Position:** {pos_label} · **Street:** {scenario.current_street.title()}")
+
+        st.divider()
+        st.subheader("🤔 What's your play?")
+        st.caption("Type your action: fold, check, call, bet [size], raise [size], all-in")
+
+        user_guess = st.text_input(
+            "Your action:",
+            value="",
+            placeholder="e.g. bet 67, check, raise, fold",
+            key="quiz_guess_input",
+        )
+
+        if st.button("✅ Submit Answer", type="primary", use_container_width=True):
+            if not user_guess.strip():
+                st.warning("Please type an action first.")
+            else:
+                # Score the answer
+                strategy = qr["strategy"]
+                if strategy is None:
+                    st.error("No strategy available to score against. Try a different spot.")
+                else:
+                    qs = score_user_action(user_guess, strategy)
+                    st.session_state["quiz_score"] = qs
+                    st.session_state["quiz_state"] = "revealed"
+
+                    # Generate coaching feedback
+                    try:
+                        feedback = generate_quiz_feedback(
+                            scenario=qr["scenario"],
+                            strategy=strategy,
+                            quiz_score=qs,
+                            output_level=output_level,
+                        )
+                        st.session_state["quiz_feedback"] = feedback
+                    except Exception as e:
+                        st.session_state["quiz_feedback"] = (
+                            f"_(Coaching feedback unavailable: {e})_"
+                        )
+
+                    # Record in history
+                    st.session_state["quiz_history"].append({
+                        "hand": qr["scenario"].hero_hand if qr.get("scenario") else "?",
+                        "score": qs.score,
+                        "grade": qs.grade,
+                        "user_action": qs.user_action,
+                        "gto_action": qs.gto_best_action,
+                    })
+                    st.rerun()
+
+        if st.button("🔄 New Spot", use_container_width=True):
+            st.session_state["quiz_state"] = "idle"
+            st.session_state["quiz_result"] = None
+            st.session_state["quiz_score"] = None
+            st.session_state["quiz_feedback"] = None
+            st.rerun()
+
+    elif quiz_state == "revealed":
+        # Show score + strategy + coaching feedback
+        qs = st.session_state.get("quiz_score")
+        qr = st.session_state.get("quiz_result")
+        qfeedback = st.session_state.get("quiz_feedback", "")
+
+        if qs and qr:
+            st.divider()
+
+            # Score header
+            grade_colors = {
+                "Perfect": "green",
+                "Good": "blue",
+                "Acceptable": "orange",
+                "Incorrect": "red",
+            }
+            grade_color = grade_colors.get(qs.grade, "gray")
+
+            st.subheader(f"Score: {qs.score}/100 — :{grade_color}[{qs.grade}]")
+
+            # Comparison metrics
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Your Action", qs.user_action)
+            mc2.metric("GTO Best", qs.gto_best_action)
+            mc3.metric(
+                "GTO Freq of Your Action",
+                f"{qs.gto_freq_of_user_action * 100:.1f}%",
+            )
+
+            if qs.is_mixed_spot:
+                st.info("ℹ️ This is a **mixed strategy** spot — GTO uses multiple actions.")
+
+            # Show scenario metrics
+            if qr.get("scenario"):
+                scenario = qr["scenario"]
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Hand", scenario.hero_hand)
+                m2.metric("Board", scenario.board.replace(",", " ") if scenario.board else "Preflop")
+                m3.metric("Pot", f"{scenario.pot_size_bb:.0f}bb")
+                m4.metric("Stack", f"{scenario.effective_stack_bb:.0f}bb")
+
+            # Strategy bars
+            if qr.get("strategy"):
+                strategy = qr["strategy"]
+                st.subheader("📊 GTO Strategy")
+                for action, freq in sorted(strategy.actions.items(), key=lambda x: -x[1]):
+                    pct = freq * 100
+                    bar_col, pct_col = st.columns([5, 1])
+                    bar_col.progress(min(freq, 1.0), text=action)
+                    pct_col.markdown(f"**{pct:.1f}%**")
+
+            # Coaching feedback
+            st.subheader("🎓 Coaching")
+            st.markdown(qfeedback)
+
+        # New quiz button
+        if st.button("🔄 New Spot", type="primary", use_container_width=True, key="quiz_new"):
+            st.session_state["quiz_state"] = "idle"
+            st.session_state["quiz_result"] = None
+            st.session_state["quiz_score"] = None
+            st.session_state["quiz_feedback"] = None
+            st.rerun()
+
+        # Session stats
+        history = st.session_state.get("quiz_history", [])
+        if len(history) > 1:
+            with st.expander(f"📊 Session Stats ({len(history)} quizzes)"):
+                avg_score = sum(h["score"] for h in history) / len(history)
+                perfect_count = sum(1 for h in history if h["grade"] == "Perfect")
+                st.markdown(
+                    f"**Average Score:** {avg_score:.0f}/100 · "
+                    f"**Perfect:** {perfect_count}/{len(history)}"
+                )
+                for i, h in enumerate(reversed(history), 1):
+                    grade_c = grade_colors.get(h["grade"], "gray")
+                    st.markdown(
+                        f"{i}. {h['hand']} — :{grade_c}[{h['grade']}] "
+                        f"({h['score']}/100) · You: {h['user_action']} → GTO: {h['gto_action']}"
+                    )
 
 
 # ──────────────────────────────────────────────
@@ -459,6 +692,7 @@ See `.streamlit/secrets.toml.example` for the template.
             mode=mode,
             on_status=on_status,
             opponent_notes=combined_notes,
+            output_level=output_level,
         )
         elapsed = time.time() - t0
 
@@ -477,7 +711,13 @@ See `.streamlit/secrets.toml.example` for the template.
         else:
             record_user_usage(st.session_state["user_email"])
 
-        # ── Results Section ──
+        # ── Quiz Mode: store result silently and transition to guessing ──
+        if _is_quiz:
+            st.session_state["quiz_result"] = result
+            st.session_state["quiz_state"] = "guessing"
+            st.rerun()
+
+        # ── Results Section (Analyzer mode only) ──
         st.divider()
 
         # Metrics row

@@ -25,9 +25,33 @@ from poker_gpt.poker_types import ScenarioData, StrategyResult
 from poker_gpt import config
 
 
-def _load_advisor_prompt() -> str:
-    """Load the advisor system prompt."""
-    prompt_path = Path(__file__).parent / "prompts" / "advisor_system.txt"
+# Valid output levels
+OUTPUT_LEVELS = ("beginner", "advanced")
+
+
+def _load_advisor_prompt(output_level: str = "advanced") -> str:
+    """Load the advisor system prompt for the given output level.
+
+    Args:
+        output_level: "beginner" or "advanced".
+
+    Returns:
+        The system prompt string.
+
+    Raises:
+        ValueError: If output_level is not recognised.
+    """
+    if output_level not in OUTPUT_LEVELS:
+        raise ValueError(
+            f"Unknown output_level '{output_level}'. "
+            f"Must be one of {OUTPUT_LEVELS}."
+        )
+    filename = (
+        "advisor_beginner_system.txt"
+        if output_level == "beginner"
+        else "advisor_system.txt"
+    )
+    prompt_path = Path(__file__).parent / "prompts" / filename
     with open(prompt_path, "r", encoding="utf-8") as f:
         return f.read()
 
@@ -39,6 +63,7 @@ def generate_advice(
     sanity_note: str = "",
     opponent_notes: str = "",
     spot_frequency_text: str = "",
+    output_level: str = "advanced",
 ) -> str:
     """
     Generate natural language poker advice from solver strategy.
@@ -54,12 +79,14 @@ def generate_advice(
             action recommendation.
         spot_frequency_text: Optional pre-formatted spot frequency data block
             from spot_frequency.format_spot_frequency_for_advisor().
+        output_level: "beginner" for plain-language output or "advanced"
+            for the full 4-section GTO analysis. Default: "advanced".
         
     Returns:
         Natural language advice string.
     """
     client = genai.Client(api_key=config.GEMINI_API_KEY)
-    system_prompt = _load_advisor_prompt()
+    system_prompt = _load_advisor_prompt(output_level)
     
     # Build the context message with all the data
     context = _build_context_message(user_input, scenario, strategy, sanity_note, opponent_notes, spot_frequency_text)
@@ -238,6 +265,7 @@ def generate_fallback_advice(
     user_input: str,
     scenario: ScenarioData,
     opponent_notes: str = "",
+    output_level: str = "advanced",
 ) -> str:
     """
     Generate poker advice using GPT alone (no solver).
@@ -247,6 +275,8 @@ def generate_fallback_advice(
         user_input: The original natural language question.
         scenario: The parsed scenario data.
         opponent_notes: Optional description of villain tendencies.
+        output_level: "beginner" for plain-language output or "advanced"
+            for the full GTO analysis. Default: "advanced".
         
     Returns:
         Natural language advice string.
@@ -281,12 +311,18 @@ IP range estimate: {scenario.ip_range[:100]}...
 Please provide GTO-approximate advice for this spot.
 """
     
+    # Use the beginner system prompt if requested, otherwise the advanced fallback
+    if output_level == "beginner":
+        system_prompt = _load_advisor_prompt("beginner")
+    else:
+        system_prompt = FALLBACK_SYSTEM_PROMPT
+
     try:
         response = client.models.generate_content(
             model=config.GEMINI_MODEL,
             contents=context,
             config=types.GenerateContentConfig(
-                system_instruction=FALLBACK_SYSTEM_PROMPT,
+                system_instruction=system_prompt,
                 temperature=0.3,
                 max_output_tokens=8192,
             ),
@@ -307,10 +343,11 @@ Please provide GTO-approximate advice for this spot.
             "blocked by safety filters or the model returned no candidates."
         )
     
-    # Add disclaimer
-    advice += (
-        "\n\n---\n*Note: This advice is generated without a solver calculation. "
-        "For exact GTO frequencies, the TexasSolver engine is needed.*"
-    )
+    # Add disclaimer (skip for beginner — keep it clean)
+    if output_level != "beginner":
+        advice += (
+            "\n\n---\n*Note: This advice is generated without a solver calculation. "
+            "For exact GTO frequencies, the TexasSolver engine is needed.*"
+        )
     
     return advice

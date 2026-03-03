@@ -99,16 +99,16 @@ def run_warm_stop(
                           f"failed: {exc}")
                 result_path = None
 
-            # Recover output from solver's CWD
-            recovered = _recover_solver_output(output_path)
-            if recovered is not None:
-                return recovered
-            elif output_path.exists() and output_path.stat().st_size > 0:
-                return output_path
-            elif result_path is not None and result_path.exists():
-                return result_path
+            # Recover output and validate JSON integrity
+            candidate = _resolve_output_candidate(output_path, result_path)
+            if candidate is not None and _validate_solver_json(candidate):
+                return candidate
+            elif candidate is not None:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Warm-stop output truncated/corrupt "
+                          f"(attempt {attempt}/{MAX_RETRIES})")
 
-            # No output produced — retry if attempts remain
+            # No valid output — retry if attempts remain
             if attempt < MAX_RETRIES:
                 if config.DEBUG:
                     print(f"[SOLVER_HARNESS] Retrying warm-stop ({attempt + 1}/{MAX_RETRIES})...")
@@ -180,15 +180,16 @@ def run_full_solve(
                           f"failed: {exc}")
                 result_path = None
 
-            recovered = _recover_solver_output(output_path)
-            if recovered is not None:
-                return recovered
-            elif output_path.exists() and output_path.stat().st_size > 0:
-                return output_path
-            elif result_path is not None and result_path.exists():
-                return result_path
+            # Recover output and validate JSON integrity
+            candidate = _resolve_output_candidate(output_path, result_path)
+            if candidate is not None and _validate_solver_json(candidate):
+                return candidate
+            elif candidate is not None:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Full solve output truncated/corrupt "
+                          f"(attempt {attempt}/{MAX_RETRIES})")
 
-            # No output produced — retry if attempts remain
+            # No valid output — retry if attempts remain
             if attempt < MAX_RETRIES:
                 if config.DEBUG:
                     print(f"[SOLVER_HARNESS] Retrying full solve ({attempt + 1}/{MAX_RETRIES})...")
@@ -269,15 +270,16 @@ def run_pruned_solve(
                           f"failed: {exc}")
                 result_path = None
 
-            recovered = _recover_solver_output(output_path)
-            if recovered is not None:
-                return recovered
-            elif output_path.exists() and output_path.stat().st_size > 0:
-                return output_path
-            elif result_path is not None and result_path.exists():
-                return result_path
+            # Recover output and validate JSON integrity
+            candidate = _resolve_output_candidate(output_path, result_path)
+            if candidate is not None and _validate_solver_json(candidate):
+                return candidate
+            elif candidate is not None:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Pruned solve output truncated/corrupt "
+                          f"(attempt {attempt}/{MAX_RETRIES})")
 
-            # No output produced — retry if attempts remain
+            # No valid output — retry if attempts remain
             if attempt < MAX_RETRIES:
                 if config.DEBUG:
                     print(f"[SOLVER_HARNESS] Retrying pruned solve ({attempt + 1}/{MAX_RETRIES})...")
@@ -532,6 +534,54 @@ def normalize_action_names(
 # ──────────────────────────────────────────────
 # Internal helpers
 # ──────────────────────────────────────────────
+
+
+def _validate_solver_json(path: Path) -> bool:
+    """Check that a solver output file contains valid, parseable JSON.
+
+    TexasSolver v0.2.0 occasionally produces truncated JSON output files
+    (the file is non-empty but json.load() fails with JSONDecodeError).
+    This validator lets the retry loop detect the corruption and re-run
+    the solver instead of returning a broken file.
+
+    Args:
+        path: Path to the solver output JSON file.
+
+    Returns:
+        True if the file exists and contains valid JSON, False otherwise.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            json.load(f)
+        return True
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        if config.DEBUG:
+            size_kb = path.stat().st_size / 1024 if path.exists() else 0
+            print(f"[SOLVER_HARNESS] Invalid JSON in {path.name} "
+                  f"({size_kb:.0f} KB): {exc}")
+        return False
+
+
+def _resolve_output_candidate(
+    output_path: Path, result_path: Optional[Path]
+) -> Optional[Path]:
+    """Find the solver output file from recovery, expected path, or run_solver return.
+
+    Does NOT validate JSON — caller must check _validate_solver_json() on the
+    returned path before accepting it.
+
+    Returns:
+        Path to the candidate output file, or None if no file found.
+    """
+    recovered = _recover_solver_output(output_path)
+    if recovered is not None:
+        return recovered
+    if output_path.exists() and output_path.stat().st_size > 0:
+        return output_path
+    if result_path is not None and result_path.exists():
+        return result_path
+    return None
+
 
 def _clean_stale_output(desired_output: Path) -> None:
     """Remove any stale solver output file from both the solver CWD and _work/.

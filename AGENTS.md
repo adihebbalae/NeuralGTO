@@ -53,6 +53,8 @@ Five specialized agent modes live in `.github/agents/`. Route work based on inte
 - Never crash the pipeline — always degrade gracefully to LLM-only mode
 - Run `python -m pytest poker_gpt/tests/ -v -k "not test_full_pipeline_with_api"` before committing
 - **Always update AGENT_STATE.md HIVE MIND table** when starting or completing any formal task
+- **`main` branch = product only** (React UI, FastAPI, W5.0). Never commit research experiments to main.
+- **`research` branch = research only** (T4.2 tree pruning, eval scripts, paper experiments). Never merge product UI code into research.
 
 ## Compute Resources
 - **Local:** Windows laptop + NPU/GPU, Ollama (qwen2.5:7b/14b), TexasSolver Windows binary

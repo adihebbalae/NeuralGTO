@@ -143,10 +143,12 @@ def run_solver(input_file: Path = None, timeout: int = None) -> Path | None:
         print(f"[SOLVER_RUNNER] Solver completed. Output: {output_file}")
         return output_file
     else:
-        raise RuntimeError(
-            "Solver completed but output file is empty or missing. "
-            f"Expected at: {output_file}"
-        )
+        if config.DEBUG:
+            print(
+                f"[SOLVER_RUNNER] Solver completed but output file is empty or "
+                f"missing. Expected at: {output_file}"
+            )
+        return None
 
 
 def is_solver_available() -> bool:

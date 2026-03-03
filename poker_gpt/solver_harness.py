@@ -354,6 +354,40 @@ def extract_action_frequencies(output_path: Path) -> Optional[dict]:
         return None
 
 
+def extract_and_normalize_frequencies(
+    output_path: Path,
+    pot_size_bb: float,
+    effective_stack_bb: float,
+    bet_sizes_pct: list[int] | None = None,
+) -> Optional[dict]:
+    """
+    Extract action frequencies and normalize names in one step.
+
+    Convenience wrapper that calls extract_action_frequencies() then
+    normalize_action_names().  Prevents callers from accidentally passing
+    raw chip-amount names (e.g. ``BET 16.500000``) to the LLM pruner,
+    which expects pot-percentage names (e.g. ``BET 33``).
+
+    Args:
+        output_path: Path to the solver output JSON.
+        pot_size_bb: Pot size in big blinds.
+        effective_stack_bb: Effective stack in big blinds.
+        bet_sizes_pct: Configured bet sizes (e.g. [33, 75]).
+
+    Returns:
+        Dict mapping normalised action names to avg frequencies, or None.
+    """
+    raw = extract_action_frequencies(output_path)
+    if raw is None:
+        return None
+    return normalize_action_names(
+        raw,
+        pot_size_bb=pot_size_bb,
+        effective_stack_bb=effective_stack_bb,
+        bet_sizes_pct=bet_sizes_pct,
+    )
+
+
 def compute_strategy_l1_distance(
     baseline_path: Path,
     comparison_path: Path,
@@ -466,6 +500,27 @@ def measure_solve_time(
 
     elapsed = time.perf_counter() - start
     return result, round(elapsed, 2)
+
+
+def is_pruning_noop(
+    original_bet_sizes: list[int],
+    keep_bet_sizes: list[int],
+) -> bool:
+    """
+    Check whether a pruning decision is effectively a no-op.
+
+    Returns True if the pruned bet sizes are identical to (or a superset of)
+    the original bet sizes — meaning the pruned solve would build the same
+    tree as the full solve and waste compute.
+
+    Args:
+        original_bet_sizes: The scenario's configured bet sizes, e.g. [33, 75].
+        keep_bet_sizes: Bet sizes retained after pruning, e.g. [33, 75].
+
+    Returns:
+        True if pruning changes nothing (skip the pruned solve).
+    """
+    return set(keep_bet_sizes) >= set(original_bet_sizes)
 
 
 def normalize_action_names(

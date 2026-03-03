@@ -14,21 +14,36 @@ Read these files in order before doing any work:
 
 At session end: append an entry to `_dev/CAPTAINS_LOG.md` (write-only audit trail — do not read during planning).
 
+## Hive Mind — Agent Broadcasting
+
+**Canonical state lives in the private `neuralgto_state` repo: `https://github.com/adihebbalae/neuralgto_state`**
+Both local agents and ECE LRC research agents clone this repo separately from the product repo. `_dev/AGENT_STATE.md` is a local working reference only.
+
+**Rules:**
+- **Before starting any task:** `cd ~/neuralgto_state && git pull origin main` → update `HIVE_MIND_ACTIVE.md` → `git commit -m "hive: [TaskID] IN PROGRESS" && git push`
+- **When you finish:** pull → update status to `✅ COMPLETE` / `⚠️ BLOCKED` / `❌ FAILED` → commit + push
+- **When you discover something** another agent needs: write it into the relevant `neuralgto_state` file — never only in a chat response
+- Never communicate status only through the user. If you have a finding, write it to `neuralgto_state` so the next agent picks it up cold
+- **Parallel tracks:** Product (W5.0) on `main` branch. Research (T4.2) on `research/t4.2-pruning` branch. Use PRODUCT_TRACK.md vs RESEARCH_TRACK.md accordingly.
+
 ## Orchestrator System (HMAS)
 
-Three specialized agent modes live in `.github/`. Route work to them based on intent:
+Five specialized agent modes live in `.github/agents/`. Route work based on intent:
 
 | Intent | Agent File | Use When |
 |--------|-----------|----------|
-| **Planning** | `.github/PLANNER.agent.md` | "What should I work on?", "What's next?", start of session |
-| **Research** | `.github/RESEARCH_ORCHESTRATOR.agent.md` | Wave 4 tasks, benchmarks, eval methodology, paper writing |
-| **Product** | `.github/MVP_ORCHESTRATOR.agent.md` | Wave 1–3 tasks, shipping features, UI, bug fixes |
+| **Managing** | `.github/agents/MANAGER.agent.md` | Back-and-forth discussion, interpreting output, quick routing, reality-checking ideas |
+| **Planning** | `.github/agents/PLANNER.agent.md` | Formal day plan, structured dispatch with execution prompts |
+| **Research** | `.github/agents/RESEARCH_ORCHESTRATOR.agent.md` | Wave 4 tasks, benchmarks, eval methodology, paper writing |
+| **Product** | `.github/agents/ENGINEER.agent.md` | Wave 1–3 tasks, shipping features, UI, bug fixes |
+| **Security** | `.github/agents/SECURITY.agent.md` | Penetration testing (Shannon + VibePenTester), breaking code, generating patches, pre-deployment hardening |
 
 **Workflow:**
-- Open a planning chat → use `PLANNER.agent.md` context first → get a day plan with explicit routes
-- Open separate task chats → attach the relevant orchestrator file → execute the specific task
-
-Tasks can be parallelized across chats. The Planner decides which ones.
+- Use MANAGER for lightweight back-and-forth — costs almost nothing, handles 80% of questions
+- Use PLANNER when you need a structured day plan with routed execution prompts
+- Use ENGINEER or RESEARCH_ORCHESTRATOR in task-focused chats for implementation work
+- Use SECURITY for red team testing, MVP hardening, and vulnerability patch generation
+- Tasks can be parallelized across chats
 
 ## Hard Rules
 - **Never commit** `.github/`, `_priv/`, `_dev/`, `_notes/`, `solver_bin/`, `.env`
@@ -37,6 +52,12 @@ Tasks can be parallelized across chats. The Planner decides which ones.
 - Never let `solver_runner.py` raise on failure — it returns `None`
 - Never crash the pipeline — always degrade gracefully to LLM-only mode
 - Run `python -m pytest poker_gpt/tests/ -v -k "not test_full_pipeline_with_api"` before committing
+- **Always update AGENT_STATE.md HIVE MIND table** when starting or completing any formal task
+
+## Compute Resources
+- **Local:** Windows laptop + NPU/GPU, Ollama (qwen2.5:7b/14b), TexasSolver Windows binary
+- **Remote (free):** UT ECE LRC SSH servers — 32-core Intel Xeon, 384 GB RAM, RHEL 8.10. CPU-only (no GPU confirmed). Requires ECE-LRC account + VPN from off-campus. Good for: long solver runs, multi-core eval jobs. Details in `_dev/AGENT_STATE.md` Compute section.
+- **Remote SSH trigger:** If a task will take >1 hour locally AND is CPU-parallelizable, ENGINEER proposes running it on UT ECE. See `ENGINEER.agent.md` for workflow.
 
 ## Active Design Tokens
 ```css

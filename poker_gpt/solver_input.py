@@ -130,8 +130,11 @@ def _build_commands(
         commands.append(f"set_bet_sizes ip,{street},raise,{raise_str}")
         commands.append(f"set_bet_sizes ip,{street},allin")
         
-        # Add donk bets for OOP on later streets (turn and river only)
-        if street in ("turn", "river"):
+        # Add donk bets for OOP on the river only.
+        # Note: TexasSolver's official sample only includes river donk.
+        # Adding turn donk dramatically inflates the game tree and can
+        # cause timeouts or segfaults on v0.2.0 with high SPR spots.
+        if street == "river":
             commands.append(f"set_bet_sizes oop,{street},donk,{bet_str}")
     
     # ── Tree Building ──

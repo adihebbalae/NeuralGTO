@@ -100,32 +100,39 @@ def run_solver(input_file: Path = None, timeout: int = None) -> Path | None:
         print(f"[SOLVER_RUNNER] Running command: {' '.join(cmd)}")
     
     # Execute solver
+    # Design: use Popen + wait(timeout) rather than subprocess.run().
+    # stdout=DEVNULL: TexasSolver prints one line per iteration — capturing
+    # that pipe causes Python to hang draining it after a timeout kill.
+    # We let the solver self-terminate via its own max_iterations setting;
+    # _timeout is a generous safety net (default 1800s for overnight runs).
+    # Because stdout is DEVNULL, post-kill wait() returns instantly.
     try:
         print("[SOLVER_RUNNER] Starting solver... (this may take 1-5 minutes)")
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
-            text=True,
-            timeout=_timeout,
-            cwd=str(binary_path.parent),  # Run from the binary's directory
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            cwd=str(binary_path.parent),
         )
-        
-        if config.DEBUG:
-            print(f"[SOLVER_RUNNER] stdout:\n{result.stdout[-500:]}")  # Last 500 chars
-            if result.stderr:
-                print(f"[SOLVER_RUNNER] stderr:\n{result.stderr[-500:]}")
-        
-        if result.returncode != 0:
+        try:
+            _, stderr_bytes = proc.communicate(timeout=_timeout)
+            stderr_text = stderr_bytes.decode(errors="replace") if stderr_bytes else ""
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()  # instant — stdout is DEVNULL
             raise RuntimeError(
-                f"Solver exited with code {result.returncode}.\n"
-                f"stderr: {result.stderr[-500:]}"
+                f"Solver timed out after {_timeout}s. "
+                "Increase timeout or reduce max_iterations."
             )
-        
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(
-            f"Solver timed out after {_timeout}s. "
-            "Try reducing max_iterations or increasing accuracy tolerance."
-        )
+
+        if config.DEBUG and stderr_text:
+            print(f"[SOLVER_RUNNER] stderr:\n{stderr_text[-500:]}")
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Solver exited with code {proc.returncode}.\n"
+                f"stderr: {stderr_text[-500:]}"
+            )
     except FileNotFoundError:
         print(f"[SOLVER_RUNNER] Could not execute binary: {binary_path}")
         return None

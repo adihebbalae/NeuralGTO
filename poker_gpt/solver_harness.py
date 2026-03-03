@@ -28,6 +28,15 @@ from poker_gpt.solver_input import generate_solver_input
 from poker_gpt.solver_runner import run_solver, is_solver_available
 
 
+# TexasSolver v0.2.0 Linux binary has a non-deterministic segfault bug
+# during CFR iteration 0 on certain board+range combinations.  The crash
+# is board-specific (some boards crash 100% of attempts, others never)
+# but also has a stochastic component (the same board may crash on one
+# run and succeed on the next).  Adding retry logic helps the stochastic
+# cases; deterministic crashes will fail after MAX_RETRIES attempts.
+MAX_RETRIES = 3
+
+
 def run_warm_stop(
     scenario: ScenarioData,
     max_iterations: int = 20,
@@ -79,24 +88,36 @@ def run_warm_stop(
         # Patch the dump_result line to use our tagged output filename
         _patch_output_path(input_path, output_path)
 
-        # Run solver
-        try:
-            result_path = run_solver(input_file=input_path, timeout=timeout)
-        except Exception:
-            result_path = None
+        # Run solver with retry logic (TexasSolver v0.2.0 segfault workaround)
+        for attempt in range(1, MAX_RETRIES + 1):
+            _clean_stale_output(output_path)
+            try:
+                result_path = run_solver(input_file=input_path, timeout=timeout)
+            except Exception as exc:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Warm-stop attempt {attempt}/{MAX_RETRIES} "
+                          f"failed: {exc}")
+                result_path = None
 
-        # Recover output from solver's CWD
-        recovered = _recover_solver_output(output_path)
-        if recovered is not None:
-            return recovered
-        elif output_path.exists() and output_path.stat().st_size > 0:
-            return output_path
-        elif result_path is not None and result_path.exists():
-            return result_path
-        else:
-            if config.DEBUG:
-                print(f"[SOLVER_HARNESS] Warm-stop output not found at {output_path}")
-            return None
+            # Recover output from solver's CWD
+            recovered = _recover_solver_output(output_path)
+            if recovered is not None:
+                return recovered
+            elif output_path.exists() and output_path.stat().st_size > 0:
+                return output_path
+            elif result_path is not None and result_path.exists():
+                return result_path
+
+            # No output produced — retry if attempts remain
+            if attempt < MAX_RETRIES:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Retrying warm-stop ({attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(1)
+
+        if config.DEBUG:
+            print(f"[SOLVER_HARNESS] Warm-stop output not found at {output_path} "
+                  f"after {MAX_RETRIES} attempts")
+        return None
 
     except Exception as e:
         if config.DEBUG:
@@ -148,22 +169,35 @@ def run_full_solve(
 
         _patch_output_path(input_path, output_path)
 
-        try:
-            result_path = run_solver(input_file=input_path, timeout=timeout)
-        except Exception:
-            result_path = None
+        # Run solver with retry logic (TexasSolver v0.2.0 segfault workaround)
+        for attempt in range(1, MAX_RETRIES + 1):
+            _clean_stale_output(output_path)
+            try:
+                result_path = run_solver(input_file=input_path, timeout=timeout)
+            except Exception as exc:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Full solve attempt {attempt}/{MAX_RETRIES} "
+                          f"failed: {exc}")
+                result_path = None
 
-        recovered = _recover_solver_output(output_path)
-        if recovered is not None:
-            return recovered
-        elif output_path.exists() and output_path.stat().st_size > 0:
-            return output_path
-        elif result_path is not None and result_path.exists():
-            return result_path
-        else:
-            if config.DEBUG:
-                print(f"[SOLVER_HARNESS] Full solve output not found at {output_path}")
-            return None
+            recovered = _recover_solver_output(output_path)
+            if recovered is not None:
+                return recovered
+            elif output_path.exists() and output_path.stat().st_size > 0:
+                return output_path
+            elif result_path is not None and result_path.exists():
+                return result_path
+
+            # No output produced — retry if attempts remain
+            if attempt < MAX_RETRIES:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Retrying full solve ({attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(1)
+
+        if config.DEBUG:
+            print(f"[SOLVER_HARNESS] Full solve output not found at {output_path} "
+                  f"after {MAX_RETRIES} attempts")
+        return None
 
     except Exception as e:
         if config.DEBUG:
@@ -224,22 +258,35 @@ def run_pruned_solve(
 
         _patch_output_path(input_path, output_path)
 
-        try:
-            result_path = run_solver(input_file=input_path, timeout=timeout)
-        except Exception:
-            result_path = None
+        # Run solver with retry logic (TexasSolver v0.2.0 segfault workaround)
+        for attempt in range(1, MAX_RETRIES + 1):
+            _clean_stale_output(output_path)
+            try:
+                result_path = run_solver(input_file=input_path, timeout=timeout)
+            except Exception as exc:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Pruned solve attempt {attempt}/{MAX_RETRIES} "
+                          f"failed: {exc}")
+                result_path = None
 
-        recovered = _recover_solver_output(output_path)
-        if recovered is not None:
-            return recovered
-        elif output_path.exists() and output_path.stat().st_size > 0:
-            return output_path
-        elif result_path is not None and result_path.exists():
-            return result_path
-        else:
-            if config.DEBUG:
-                print(f"[SOLVER_HARNESS] Pruned solve output not found at {output_path}")
-            return None
+            recovered = _recover_solver_output(output_path)
+            if recovered is not None:
+                return recovered
+            elif output_path.exists() and output_path.stat().st_size > 0:
+                return output_path
+            elif result_path is not None and result_path.exists():
+                return result_path
+
+            # No output produced — retry if attempts remain
+            if attempt < MAX_RETRIES:
+                if config.DEBUG:
+                    print(f"[SOLVER_HARNESS] Retrying pruned solve ({attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(1)
+
+        if config.DEBUG:
+            print(f"[SOLVER_HARNESS] Pruned solve output not found at {output_path} "
+                  f"after {MAX_RETRIES} attempts")
+        return None
 
     except Exception as e:
         if config.DEBUG:

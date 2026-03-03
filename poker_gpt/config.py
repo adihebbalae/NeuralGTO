@@ -202,11 +202,11 @@ MODE_PRESETS = {
     },
     "default": {
         "use_solver": True,
-        "accuracy": 2.0,
-        "max_iterations": 100,
-        "timeout": 180,
+        "accuracy": 5.0,
+        "max_iterations": 50,
+        "timeout": 60,
         "dump_rounds": 2,
-        "description": "Solver ~98% accuracy (2% exploitability, ~1-2 min)",
+        "description": "Solver ~95% accuracy (5% exploitability, ~30-60s) — balanced study mode",
     },
     "pro": {
         "use_solver": True,

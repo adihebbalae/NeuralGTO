@@ -24,7 +24,7 @@ Both local agents and ECE LRC research agents clone this repo separately from th
 - **When you finish:** pull → update status to `✅ COMPLETE` / `⚠️ BLOCKED` / `❌ FAILED` → commit + push
 - **When you discover something** another agent needs: write it into the relevant `neuralgto_state` file — never only in a chat response
 - Never communicate status only through the user. If you have a finding, write it to `neuralgto_state` so the next agent picks it up cold
-- **Parallel tracks:** Product (W5.0) on `main` branch. Research (T4.2) on `research/t4.2-pruning` branch. Use PRODUCT_TRACK.md vs RESEARCH_TRACK.md accordingly.
+- **Parallel tracks:** Product (W5.0) on `main` branch. Research (T4.2) on `research` branch. Use PRODUCT_TRACK.md vs RESEARCH_TRACK.md accordingly.
 
 ## Orchestrator System (HMAS)
 

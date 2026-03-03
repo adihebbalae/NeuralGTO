@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from backend.app.models.schemas import (
+from app.models.schemas import (
     AnalysisMode,
     AnalyzeResponse,
     EvSignal,

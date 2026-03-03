@@ -1,5 +1,5 @@
 # backend.app.models — Pydantic schemas and type adapters.
-from backend.app.models.schemas import (
+from app.models.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     BoardUpdateRequest,

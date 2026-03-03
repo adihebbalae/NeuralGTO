@@ -227,9 +227,10 @@ def main() -> int:
         )
         return 1
 
-    print(f"{GREEN}✓ Security pre-commit checks passed ({len(staged_files)} file(s) scanned).{RESET}")
+    print(f"{GREEN}[OK] Security pre-commit checks passed ({len(staged_files)} file(s) scanned).{RESET}")
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+

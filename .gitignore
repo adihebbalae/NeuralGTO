@@ -29,7 +29,10 @@ AGENTS.md
 # Internal notes / brainstorm / AI output — not for public repo
 _notes/
 _priv/
-_dev/
+
+# Agent state is now tracked in separate submodule (_state/)
+# Local-only dev artifacts remain in local cache:
+_dev_local/
 
 # PokerGPT work files
 poker_gpt/_work/

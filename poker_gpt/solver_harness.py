@@ -26,6 +26,7 @@ from poker_gpt import config
 from poker_gpt.poker_types import ScenarioData
 from poker_gpt.solver_input import generate_solver_input
 from poker_gpt.solver_runner import run_solver, is_solver_available
+from poker_gpt import solver_pruner_cpp
 
 
 # TexasSolver v0.2.0 Linux binary has a non-deterministic segfault bug
@@ -368,6 +369,8 @@ def extract_and_normalize_frequencies(
     raw chip-amount names (e.g. ``BET 16.500000``) to the LLM pruner,
     which expects pot-percentage names (e.g. ``BET 33``).
 
+    Uses C++ implementation when available for ~5-10% speedup (T4.2c).
+
     Args:
         output_path: Path to the solver output JSON.
         pot_size_bb: Pot size in big blinds.
@@ -377,6 +380,19 @@ def extract_and_normalize_frequencies(
     Returns:
         Dict mapping normalised action names to avg frequencies, or None.
     """
+    # Try C++ implementation first (T4.2c optimization)
+    if solver_pruner_cpp.is_cpp_available():
+        result = solver_pruner_cpp.extract_and_normalize_cpp(
+            output_path,
+            pot_size_bb,
+            effective_stack_bb,
+            bet_sizes_pct or []
+        )
+        if result is not None:
+            return result
+        # C++ failed, fall through to Python
+    
+    # Python fallback
     raw = extract_action_frequencies(output_path)
     if raw is None:
         return None

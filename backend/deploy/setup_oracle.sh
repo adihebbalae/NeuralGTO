@@ -32,6 +32,10 @@ SERVICE_NAME="neuralgto-api"
 PYTHON_VERSION="3.13"
 TEXASSOLVER_VERSION="v0.2.0"
 TEXASSOLVER_URL="https://github.com/bupticybee/TexasSolver/releases/download/${TEXASSOLVER_VERSION}/TexasSolver-${TEXASSOLVER_VERSION}-Linux.zip"
+# SHA-256 of TexasSolver-v0.2.0-Linux.zip — verify against the release page
+# before deploying: https://github.com/bupticybee/TexasSolver/releases/tag/v0.2.0
+# Update this value if you change TEXASSOLVER_VERSION.
+TEXASSOLVER_SHA256="FIXME_verify_sha256_from_github_release_page"
 
 # Colours
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -59,7 +63,10 @@ if ! command -v python3.13 &>/dev/null; then
     sudo apt-get update -qq
     sudo apt-get install -y -qq \
         python3.13 python3.13-venv python3.13-dev python3.13-distutils
-    curl -sS https://bootstrap.pypa.io/get-pip.py | sudo python3.13
+    # Use ensurepip (ships with Python 3.13) — avoids piping remote code to sudo.
+    sudo python3.13 -m ensurepip --upgrade 2>/dev/null \
+        || { warn "ensurepip unavailable; falling back to get-pip.py (verify your network)"; \
+             curl -sS https://bootstrap.pypa.io/get-pip.py | sudo python3.13; }
 else
     info "Python 3.13 already installed: $(python3.13 --version)"
 fi
@@ -99,6 +106,13 @@ if [[ ! -f "${SOLVER_DIR}/console_solver" ]]; then
     mkdir -p "${SOLVER_DIR}"
     TMP_ZIP=$(mktemp /tmp/texassolver.XXXXXX.zip)
     curl -sL "${TEXASSOLVER_URL}" -o "${TMP_ZIP}"
+    # Verify SHA-256 before unpacking (supply chain hardening).
+    if [[ "${TEXASSOLVER_SHA256}" != FIXME* ]]; then
+        echo "${TEXASSOLVER_SHA256}  ${TMP_ZIP}" | sha256sum --check --quiet \
+            || { rm -f "${TMP_ZIP}"; die "TexasSolver zip SHA-256 mismatch — aborting."; }
+    else
+        warn "TEXASSOLVER_SHA256 is not set — skipping integrity check. Set it before production use."
+    fi
     unzip -q "${TMP_ZIP}" -d "${SOLVER_DIR}"
     # Binary may be nested — find it and move to expected location
     SOLVER_BIN=$(find "${SOLVER_DIR}" -name "console_solver" -type f | head -1)

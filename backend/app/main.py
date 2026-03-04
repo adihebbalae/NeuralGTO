@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.api.analyze import router as analyze_router
 from app.config import settings
@@ -65,6 +66,12 @@ app = FastAPI(
 
 app.state.limiter = limiter
 
+# Trust the X-Forwarded-For / X-Real-IP headers from localhost only
+# (nginx or cloudflared tunnel sits on 127.0.0.1).
+# Without this, get_remote_address always returns 127.0.0.1 and the
+# per-IP rate limit collapses to a single shared bucket for all users.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["127.0.0.1"])
+
 
 # ──────────────────────────────────────────────
 # Routers
@@ -83,20 +90,18 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
 
 # ──────────────────────────────────────────────
 # CORS — whitelist only known frontends
+# Origins are loaded from settings (env var ALLOWED_ORIGINS), which
+# defaults to localhost dev + https://neuralgto.pages.dev.
 # ──────────────────────────────────────────────
-
-_ALLOWED_ORIGINS: list[str] = [
-    "http://localhost:5173",          # Vite dev server
-    "http://localhost:4173",          # Vite preview
-    "https://neuralgto.vercel.app",   # Production deploy
-]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_ALLOWED_ORIGINS,
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
+    # Wildcard not permitted with allow_credentials=True (browser spec);
+    # enumerate the headers the frontend actually sends.
+    allow_headers=["Content-Type"],
 )
 
 

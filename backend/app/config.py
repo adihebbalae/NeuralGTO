@@ -71,6 +71,7 @@ class _Settings:
     """Read-once settings object.  Attributes are populated from env vars."""
 
     __slots__ = (
+        "ALLOWED_ORIGINS",
         "GEMINI_API_KEY",
         "DEBUG",
         "SOLVER_TIMEOUT",
@@ -86,6 +87,15 @@ class _Settings:
         )
         self.PROJECT_ROOT: Path = _PROJECT_ROOT
         self.WORK_DIR: Path = _PROJECT_ROOT / "_work"
+        # Comma-separated allowed CORS origins from env (defaults cover local
+        # dev + Cloudflare Pages production).
+        _raw_origins = os.getenv(
+            "ALLOWED_ORIGINS",
+            "http://localhost:5173,http://localhost:4173,https://neuralgto.pages.dev",
+        )
+        self.ALLOWED_ORIGINS: list[str] = [
+            o.strip() for o in _raw_origins.split(",") if o.strip()
+        ]
 
     def ensure_work_dir(self) -> None:
         """Create the work directory if it doesn't exist."""

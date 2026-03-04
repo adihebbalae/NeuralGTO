@@ -5,6 +5,8 @@
  * base-URL handling, and error shapes live in one place.
  */
 
+import type { AnalyzeRequest, AnalyzeResponse, ApiError, ReanalyzeStreetRequest } from '../types'
+
 /** Health-check response shape (mirrors backend HealthResponse). */
 export interface HealthResponse {
   status: string
@@ -32,4 +34,64 @@ export async function fetchHealth(): Promise<HealthResponse> {
     throw new Error(`Health check failed: ${res.status} ${res.statusText}`)
   }
   return res.json() as Promise<HealthResponse>
+}
+
+/**
+ * Submit a poker hand for GTO analysis.
+ *
+ * @param request - Scenario description (NL text or structured fields)
+ * @returns Parsed {@link AnalyzeResponse} with advice + structured breakdown
+ * @throws  {Error} With human-readable message on 4xx/5xx responses
+ */
+export async function analyzeHand(
+  request: AnalyzeRequest,
+): Promise<AnalyzeResponse> {
+  const res = await fetch(`${BASE_URL}/api/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+
+  if (!res.ok) {
+    let message = `Analysis failed: ${res.status} ${res.statusText}`
+    try {
+      const err = (await res.json()) as ApiError
+      if (err.detail) message = err.detail
+    } catch {
+      // JSON parse failed — keep the status-line message
+    }
+    throw new Error(message)
+  }
+
+  return res.json() as Promise<AnalyzeResponse>
+}
+
+/**
+ * Re-run analysis with new board cards (interactive card picker).
+ *
+ * @param request - Current scenario + new board cards
+ * @returns Parsed {@link AnalyzeResponse} with updated advice for the new street
+ * @throws  {Error} With human-readable message on 4xx/5xx responses
+ */
+export async function reanalyzeStreet(
+  request: ReanalyzeStreetRequest,
+): Promise<AnalyzeResponse> {
+  const res = await fetch(`${BASE_URL}/api/reanalyze-street`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+
+  if (!res.ok) {
+    let message = `Reanalysis failed: ${res.status} ${res.statusText}`
+    try {
+      const err = (await res.json()) as ApiError
+      if (err.detail) message = err.detail
+    } catch {
+      // JSON parse failed — keep the status-line message
+    }
+    throw new Error(message)
+  }
+
+  return res.json() as Promise<AnalyzeResponse>
 }

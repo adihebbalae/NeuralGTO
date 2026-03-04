@@ -1,0 +1,4 @@
+# Cloudflare Pages — SPA routing
+# Serve index.html for every path so React Router handles navigation.
+# Without this, direct navigation to /analyze or /history returns 404.
+/*  /index.html  200

@@ -1,0 +1,12 @@
+# Cloudflare Pages — HTTP security headers
+# Applied to every response served from this Pages project.
+# Tighten connect-src after the Oracle VM domain is known:
+#   connect-src 'self' https://api.your-domain.com;
+
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  X-XSS-Protection: 1; mode=block
+  Cross-Origin-Opener-Policy: same-origin

@@ -33,6 +33,7 @@ from app.models.schemas import (
     StructuredAdviceResponse,
     TopPlayResponse,
 )
+from app.services.advice_formatter import format_structured_advice
 
 
 def _safe_get(obj: Any, attr: str, default: Any = "") -> Any:
@@ -48,8 +49,12 @@ def _to_strategy_source(raw: str) -> StrategySource:
     """Map free-text source strings to the enum, with a sensible fallback."""
     mapping = {
         "solver": StrategySource.SOLVER,
+        "solver_cached": StrategySource.SOLVER,
         "gemini": StrategySource.GEMINI,
+        "llm_only": StrategySource.GEMINI,
+        "llm_fallback": StrategySource.GPT_FALLBACK,
         "gpt_fallback": StrategySource.GPT_FALLBACK,
+        "preflop_lookup": StrategySource.SOLVER,
         "validation_error": StrategySource.VALIDATION_ERROR,
     }
     return mapping.get(raw, StrategySource.GEMINI)
@@ -178,6 +183,14 @@ def serialize_pipeline_result(result: dict) -> AnalyzeResponse:
     Returns:
         A fully-populated ``AnalyzeResponse`` ready for JSON serialisation.
     """
+    # Try pre-built structured_advice first; otherwise generate it
+    # from the raw pipeline result (W5.0c).
+    sa_raw = result.get("structured_advice")
+    if sa_raw is not None:
+        structured = structured_advice_to_response(sa_raw)
+    else:
+        structured = format_structured_advice(result)
+
     return AnalyzeResponse(
         advice=result.get("advice", ""),
         source=_to_strategy_source(result.get("source", "unknown")),
@@ -190,7 +203,5 @@ def serialize_pipeline_result(result: dict) -> AnalyzeResponse:
         sanity_note=result.get("sanity_note", ""),
         scenario=scenario_to_response(result.get("scenario")),
         strategy=strategy_to_response(result.get("strategy")),
-        structured_advice=structured_advice_to_response(
-            result.get("structured_advice")
-        ),
+        structured_advice=structured,
     )

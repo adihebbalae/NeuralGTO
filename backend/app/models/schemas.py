@@ -274,6 +274,95 @@ class BoardUpdateRequest(BaseModel):
         return v
 
 
+class ReanalyzeStreetRequest(BaseModel):
+    """POST /api/reanalyze-street — re-run solver with new board cards.
+
+    Used by the interactive turn/river card picker. Takes the current scenario
+    from a prior analysis and new board cards, then re-runs the full pipeline.
+    """
+
+    # Current scenario state (from prior /api/analyze response)
+    hero_hand: str = Field(
+        ...,
+        min_length=2,
+        max_length=10,
+        description="Hero's hole cards, e.g. 'AhKs'.",
+    )
+    hero_position: str = Field(
+        ...,
+        max_length=5,
+        description="Hero's position.",
+    )
+    current_board: str = Field(
+        default="",
+        max_length=20,
+        description="Current board cards (may be empty for preflop).",
+    )
+    pot_size_bb: float = Field(
+        ...,
+        ge=0.0,
+        le=5000.0,
+        description="Current pot size in big blinds.",
+    )
+    effective_stack_bb: float = Field(
+        ...,
+        ge=0.0,
+        le=5000.0,
+        description="Effective stack in big blinds.",
+    )
+    villain_position: str = Field(
+        default="",
+        max_length=5,
+        description="Villain's position.",
+    )
+
+    # New cards to add
+    new_board_cards: str = Field(
+        ...,
+        min_length=2,
+        max_length=20,
+        description="New cards to add to board, e.g. 'Ah,9c,Kd' or 'As' for one card.",
+    )
+
+    # Analysis options
+    mode: AnalysisMode = Field(default=AnalysisMode.DEFAULT)
+    opponent_notes: str = Field(default="", max_length=500)
+    output_level: OutputLevel = Field(default=OutputLevel.ADVANCED)
+
+    @field_validator("hero_hand")
+    @classmethod
+    def _hero_hand_safe(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 2:
+            raise ValueError("hero_hand must be at least 2 characters.")
+        return v
+
+    @field_validator("hero_position", "villain_position")
+    @classmethod
+    def _position_upper(cls, v: str) -> str:
+        return v.strip().upper()
+
+    @field_validator("current_board", "new_board_cards")
+    @classmethod
+    def _board_safe(cls, v: str) -> str:
+        v = v.strip()
+        # Allow empty for current_board (preflop case)
+        if v and not _BOARD_RE.match(v) and not _CARD_RE.match(v):
+            # Also accept single card format for new_board_cards
+            raise ValueError(
+                "Board cards must be valid poker cards (e.g. 'Ah,9c' or 'Kd')."
+            )
+        return v
+
+    @field_validator("opponent_notes")
+    @classmethod
+    def _opp_notes_safe(cls, v: str) -> str:
+        v = v.strip()
+        if v and not _SAFE_TEXT_RE.match(v):
+            raise ValueError("Opponent notes contain disallowed characters.")
+        return v
+
+
 # ══════════════════════════════════════════════
 # RESPONSE models
 # ══════════════════════════════════════════════

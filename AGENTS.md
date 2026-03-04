@@ -9,7 +9,9 @@ This is a **study tool**, not a bot. Dual goals: deployable product + publishabl
 ## Session Startup
 Read these files in order before doing any work:
 1. `_priv/AGENT-STATE.md` — orientation, key files, open threads, key decisions, hard rules
-2. `_dev/AGENT_STATE.md` — DAG wave tracker (what's complete / in-progress / blocked)
+2. **Choose split file based on your task:**
+   - **Product work (W5.0):** Read `_dev/AGENT_STATE_PRODUCT.md` — React/FastAPI DAG, local dev resources
+   - **Research work (T4.x):** Read `_dev/AGENT_STATE_RESEARCH.md` — LLM pruning, evals, ECE LRC resources
 3. `_priv/NEXT_STEPS.md` — consult if user asks what to work on next
 
 At session end: append an entry to `_dev/CAPTAINS_LOG.md` (write-only audit trail — do not read during planning).

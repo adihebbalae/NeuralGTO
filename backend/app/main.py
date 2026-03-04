@@ -29,6 +29,7 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from app.api.analyze import router as analyze_router
 from app.config import settings
 from app.models.schemas import HealthResponse
 
@@ -63,6 +64,13 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
+
+
+# ──────────────────────────────────────────────
+# Routers
+# ──────────────────────────────────────────────
+
+app.include_router(analyze_router)
 
 
 @app.exception_handler(RateLimitExceeded)

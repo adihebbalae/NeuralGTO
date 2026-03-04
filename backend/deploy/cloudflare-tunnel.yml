@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────
+# backend/deploy/cloudflare-tunnel.yml
+#
+# Cloudflare Tunnel config — primary HTTPS approach for Oracle Cloud.
+# Simpler than nginx + Let's Encrypt: CF handles TLS at the edge,
+# no ports need to be publicly open on the VM.
+#
+# Setup (one-time, run on the Oracle VM):
+#   1. cloudflared tunnel login
+#   2. cloudflared tunnel create neuralgto-api
+#   3. Copy the credentials JSON path echoed by step 2 →
+#      replace <CREDENTIALS_FILE_PATH> below
+#   4. In the Cloudflare dashboard: add a CNAME record
+#      api.your-domain.com → <tunnel-id>.cfargotunnel.com
+#   5. sudo cp cloudflare-tunnel.yml /etc/cloudflared/config.yml
+#   6. sudo cloudflared service install
+#   7. sudo systemctl start cloudflared
+# ─────────────────────────────────────────────────────────────────────────
+
+tunnel: neuralgto-api
+
+# Path to tunnel credentials JSON created by `cloudflared tunnel create`
+credentials-file: /home/ubuntu/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # Route all traffic to neuralgto-api subdomain → FastAPI on localhost:8000
+  - hostname: api.your-domain.com
+    service: http://localhost:8000
+
+  # Required catch-all rule
+  - service: http_status:404

@@ -1,0 +1,53 @@
+[Unit]
+Description=NeuralGTO FastAPI Backend
+Documentation=https://github.com/adihebbalae/neus_nlhe
+After=network.target
+Wants=network-online.target
+
+[Service]
+# ── Identity ──────────────────────────────────────────────────────────────
+# Run as the ubuntu (non-root) user.  Change if you created a dedicated
+# service account (recommended for hardened production deploys).
+User=ubuntu
+Group=ubuntu
+
+# ── Working directory ─────────────────────────────────────────────────────
+# setup_oracle.sh patches this path — do not edit directly.
+WorkingDirectory=/opt/neuralgto
+
+# ── Environment ───────────────────────────────────────────────────────────
+EnvironmentFile=/opt/neuralgto/.env
+
+# Ensure poker_gpt package is importable (project root on PYTHONPATH)
+Environment=PYTHONPATH=/opt/neuralgto
+
+# ── Start command ─────────────────────────────────────────────────────────
+# Bind only to localhost; nginx (or cloudflared) fronts the public traffic.
+ExecStart=/opt/neuralgto/.venv/bin/uvicorn \
+    app.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info
+
+# ── Restart policy ────────────────────────────────────────────────────────
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=3
+StartLimitIntervalSec=30
+
+# ── Hardening ────────────────────────────────────────────────────────────
+# Prevent privilege escalation, isolate temp files, etc.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/neuralgto/_work /opt/neuralgto/poker_gpt/_cache
+ProtectHome=read-only
+
+# ── Timeouts ─────────────────────────────────────────────────────────────
+# Allow > 360s for pro-mode solver calls before systemd kills the process.
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

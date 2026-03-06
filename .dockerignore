@@ -1,0 +1,22 @@
+# Ignore large files and development artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+poetry.lock
+.git/
+.github/
+_dev/
+_priv/
+_notes/
+_work/
+solver_bin/
+.env
+.DS_Store
+*.log
+node_modules/
+dist/
+build/

@@ -116,8 +116,9 @@ async def health() -> HealthResponse:
     Returns:
         HealthResponse with status, solver availability, and version.
     """
+    from poker_gpt.solver_runner import is_solver_available
     return HealthResponse(
         status="ok",
-        solver_available=False,   # Solver integration in a later task
+        solver_available=is_solver_available(),
         version="0.1.0",
     )

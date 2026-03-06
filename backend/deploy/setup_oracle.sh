@@ -62,7 +62,7 @@ if ! command -v python3.13 &>/dev/null; then
     sudo add-apt-repository -y ppa:deadsnakes/ppa
     sudo apt-get update -qq
     sudo apt-get install -y -qq \
-        python3.13 python3.13-venv python3.13-dev python3.13-distutils
+        python3.13 python3.13-venv python3.13-dev
     # Use ensurepip (ships with Python 3.13) — avoids piping remote code to sudo.
     sudo python3.13 -m ensurepip --upgrade 2>/dev/null \
         || { warn "ensurepip unavailable; falling back to get-pip.py (verify your network)"; \

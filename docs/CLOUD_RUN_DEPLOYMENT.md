@@ -90,7 +90,35 @@ Rebuild and redeploy frontend to Cloudflare Pages.
 
 ## Important Notes
 
-### LLM-Only Mode
+### Service Account & IAM Permissions
+
+Cloud Run uses a default service account. **Recommended: Create a minimal service account with explicit permissions:**
+
+```bash
+# Create a dedicated service account
+gcloud iam service-accounts create neuralgto-api-runner \
+  --display-name="NeuralGTO API Runtime"
+
+# Grant only necessary permissions
+gcloud projects add-iam-policy-binding neuralgto-backend \
+  --member="serviceAccount:neuralgto-api-runner@neuralgto-backend.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+
+gcloud projects add-iam-policy-binding neuralgto-backend \
+  --member="serviceAccount:neuralgto-api-runner@neuralgto-backend.iam.gserviceaccount.com" \
+  --role="roles/logging.logWriter"
+
+# Deploy with the service account
+gcloud run deploy neuralgto-api \
+  --image gcr.io/neuralgto-backend/neuralgto-api:latest \
+  --service-account=neuralgto-api-runner@neuralgto-backend.iam.gserviceaccount.com \
+  ...
+```
+
+**API Key Security:**
+- Store Gemini API key in **Google Secret Manager**, not `.env`
+- Rotate keys regularly (especially if accidentally exposed)
+- Use Cloud Run IAM to limit who can view deployment environment variables
 Cloud Run has **no TexasSolver binary**. The backend runs in `mode=fast` (Gemini parsing + advice only, no GTO solver).
 
 To add TexasSolver later:

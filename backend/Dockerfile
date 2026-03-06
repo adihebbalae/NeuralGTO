@@ -1,7 +1,8 @@
 # NeuralGTO FastAPI Backend — Google Cloud Run Dockerfile
 # Optimized for always-free tier (~128 MB base image + deps)
+# Pinned to specific digest for reproducibility & security
 
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:da0e0fe8d68e14202ea4fb42b75c99b8e6a8e0597d6e1a0c4d747ceba2d54d87
 
 # Set working directory
 WORKDIR /app

@@ -198,7 +198,7 @@ async def analyze(request: Request, body: AnalyzeRequest) -> AnalyzeResponse:
         )
     except Exception as exc:
         # Never crash — degrade gracefully
-        logger.exception("Unexpected pipeline error")
+        logger.error("Unexpected pipeline error: %s", type(exc).__name__)
         return JSONResponse(
             status_code=500,
             content=ErrorResponse(
@@ -214,7 +214,7 @@ async def analyze(request: Request, body: AnalyzeRequest) -> AnalyzeResponse:
     try:
         response = serialize_pipeline_result(result)
     except Exception as exc:
-        logger.exception("Failed to serialize pipeline result")
+        logger.error("Failed to serialize pipeline result: %s", type(exc).__name__)
         return JSONResponse(
             status_code=500,
             content=ErrorResponse(
@@ -346,7 +346,7 @@ async def reanalyze_street(
     try:
         response = serialize_pipeline_result(result)
     except Exception as exc:
-        logger.exception("Failed to serialize reanalysis result")
+        logger.error("Failed to serialize pipeline result: %s", type(exc).__name__)
         return JSONResponse(
             status_code=500,
             content=ErrorResponse(

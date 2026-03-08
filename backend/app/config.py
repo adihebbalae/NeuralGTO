@@ -88,10 +88,10 @@ class _Settings:
         self.PROJECT_ROOT: Path = _PROJECT_ROOT
         self.WORK_DIR: Path = _PROJECT_ROOT / "_work"
         # Comma-separated allowed CORS origins from env (defaults cover local
-        # dev + Cloudflare Pages production).
+        # dev + Cloudflare Pages production + Cloudflare tunnel).
         _raw_origins = os.getenv(
             "ALLOWED_ORIGINS",
-            "http://localhost:5173,http://localhost:4173,https://neuralgto.pages.dev",
+            "http://localhost:5173,http://localhost:4173,https://neuralgto.pages.dev,https://api.neuralgto.pages.dev",
         )
         self.ALLOWED_ORIGINS: list[str] = [
             o.strip() for o in _raw_origins.split(",") if o.strip()

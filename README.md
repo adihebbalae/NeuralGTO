@@ -272,7 +272,9 @@ python -m pytest poker_gpt/tests/ -v -k "not test_full_pipeline_with_api"
 python -m pytest poker_gpt/tests/ -v -k "test_full_pipeline_with_api"
 ```
 
-**493 tests** collected across `poker_gpt/tests/` and `backend/tests/` — pipeline
+**493 tests** collected across `poker_gpt/tests/` and `backend/tests/`; the
+offline `poker_gpt` suite is 444 passing / 1 deselected (the API integration
+test) and runs in ~2s. Coverage spans pipeline
 logic, preflop lookup, hand history parsing, multi-way decomposition, quiz
 scoring, security hardening, evaluation framework, and the FastAPI endpoints.
 The frontend adds a Vitest suite (`cd neuralgto-web && npm test`).

@@ -1,8 +1,19 @@
 # AGENTS.md
 <!-- Auto-loaded at session start. Keep this file current. -->
 
+> ## ⚠️ ARCHIVED — August 2026
+>
+> **NeuralGTO is sunset.** No further feature work, research, or deployment
+> changes are planned. The orchestrator/hive-mind workflow described below is
+> historical — the `neuralgto_state` coordination repo is no longer maintained
+> and the split `_dev/AGENT_STATE_*.md` files are frozen at their final state.
+>
+> If you are an agent picking this repo up: read `README.md` and `CHANGELOG.md`
+> for the final shipped state, and treat everything below as a record of how the
+> project was run, not as live instructions. Do not start hive-mind tasks.
+
 ## Project
-NeuralGTO — neuro-symbolic GTO poker study tool. Python + Streamlit. Dark theme.
+NeuralGTO — neuro-symbolic GTO poker study tool. React 19 + FastAPI (deployed); Streamlit UI + CLI retained for local use. Dark theme.
 Pipeline: NL text → Gemini parse → TexasSolver CFR → GTO strategy extract → Gemini explain.
 This is a **study tool**, not a bot. Dual goals: deployable product + publishable research paper.
 
@@ -30,7 +41,7 @@ Both local agents and ECE LRC research agents clone this repo separately from th
 
 ## Orchestrator System (HMAS)
 
-Five specialized agent modes live in `.github/agents/`. Route work based on intent:
+Specialized agent modes live in `.github/agents/`. Route work based on intent:
 
 | Intent | Agent File | Use When |
 |--------|-----------|----------|
@@ -39,6 +50,9 @@ Five specialized agent modes live in `.github/agents/`. Route work based on inte
 | **Research** | `.github/agents/RESEARCH_ORCHESTRATOR.agent.md` | Wave 4 tasks, benchmarks, eval methodology, paper writing |
 | **Product** | `.github/agents/ENGINEER.agent.md` | Wave 1–3 tasks, shipping features, UI, bug fixes |
 | **Security** | `.github/agents/SECURITY.agent.md` | Penetration testing (Shannon + VibePenTester), breaking code, generating patches, pre-deployment hardening |
+| **Marketing** | `.github/agents/MARKETING.agent.md` | Copy, content strategy, messaging, positioning, brand voice |
+| **Growth** | `.github/agents/GROWTH_STRATEGIST.agent.md` | Launches, growth campaigns, community outreach, go-to-market |
+| **SEO** | `.github/agents/SEO_SPECIALIST.agent.md` | Blog SEO, keyword research, technical optimization, search rankings |
 
 **Workflow:**
 - Use MANAGER for lightweight back-and-forth — costs almost nothing, handles 80% of questions
@@ -46,6 +60,28 @@ Five specialized agent modes live in `.github/agents/`. Route work based on inte
 - Use ENGINEER or RESEARCH_ORCHESTRATOR in task-focused chats for implementation work
 - Use SECURITY for red team testing, MVP hardening, and vulnerability patch generation
 - Tasks can be parallelized across chats
+
+## Marketing Skills (Copilot-Native)
+
+Integrated marketing skills framework from **coreyhaines31/marketingskills**. Customized for NeuralGTO's poker study positioning.
+
+**Available Skills:**
+- `product-marketing-context` — Foundational, required; all others reference this
+- `copywriting` — Web copy, CTAs, messaging
+- `page-cro` — Landing page conversion optimization
+- `content-strategy` — Blog planning, guides, tutorials
+- `seo-audit` — Search engine optimization
+- `launch-strategy` — Feature launches and growth campaigns
+
+**How to use:**
+- Automatic: "Write copy for our landing page" → Copilot detects and applies copywriting + context
+- Manual: Type `/copywriting` or `/seo-audit` to invoke directly
+
+**Quick reference:** See `.agents/MARKETING_SKILLS_QUICK_START.md` for examples and workflows.
+
+**Full guide:** See `.agents/MARKETING_SKILLS_INTEGRATION_GUIDE.md` for setup, customization, extending.
+
+---
 
 ## Hard Rules
 - **Never commit** `.github/`, `_priv/`, `_dev/`, `_notes/`, `solver_bin/`, `.env`

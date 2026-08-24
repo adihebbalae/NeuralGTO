@@ -1,5 +1,10 @@
 # PokerGPT: Neuro-Symbolic Poker Advisor
 
+> **Historical document (February 2026).** Written before the project was renamed
+> to NeuralGTO and before the React + FastAPI rewrite. Kept for provenance.
+> For the final state of the project see [`project_summary.md`](project_summary.md),
+> [`README.md`](README.md), and [`CHANGELOG.md`](CHANGELOG.md).
+
 **A revolutionary system combining neural AI with symbolic solvers to deliver mathematically optimal poker advice in natural language.**
 
 ---

@@ -6,6 +6,12 @@
 > full-stack deployment; the ~2.3x TexasSolver performance fork (July 2026,
 > see `vendor/`) landed afterwards and is recorded in `CHANGELOG.md` under
 > 1.1.0. The research track (T4.2 tree pruning, paper) was never finished.
+>
+> **Corrections, 2026-11-20.** Earlier text called the preflop data "GTO Nexus";
+> the code reads the `qb_ranges` files bundled with the TexasSolver v0.2.0 release.
+> PokerBench accuracy here is preflop-only action-category match (fold/check/call/raise).
+> On the 424 multi-way spots, Gemini direct (77.4%) beat the pairwise pipeline (74.5%).
+> The hosted Oracle backend ran stock TexasSolver, not the optimized fork.
 
 ---
 
@@ -91,7 +97,7 @@ All modes gracefully fallback to LLM-only if solver is unavailable.
 
 ### Fallback & Resilience
 
-- **Preflop spots:** Preflop uses GTO Nexus lookup tables + LLM synthesis (TexasSolver is postflop-only)
+- **Preflop spots:** Preflop uses lookup over the pre-solved range files bundled with the TexasSolver v0.2.0 release (`qb_ranges/100bb 2.5x 500rake`) + LLM synthesis (TexasSolver is postflop-only)
 - **Multi-way hands:** Pairwise heads-up decomposition with LLM synthesis to adjust for multi-way dynamics
 - **Solver unavailable:** Full LLM-only mode with enhanced poker theory prompt
 - **Network failure:** Cached results from previous identical queries
@@ -112,7 +118,7 @@ All modes gracefully fallback to LLM-only if solver is unavailable.
 | T0.4 | Git initialization + GitHub NeuralGTO repo setup |
 | T0.5 | GTO explanation layer: 4-section advisor system prompt (blockers, range balance, board texture, equity realization) |
 | T0.6 | Exploitative override feature: `--opponent` flag for deviation reasoning |
-| T0.7 | Preflop lookup module: 420-line module integrating 1,108 pre-solved GTO Nexus range files |
+| T0.7 | Preflop lookup module: 420-line module reading the 1,108 pre-solved range files bundled with the TexasSolver v0.2.0 release (`qb_ranges`) |
 | T0.8 | Complete documentation: copilot-instructions.md, architecture docs, competitive analysis |
 | T0.9 | Literature reviews (LR1, LR2): converged on LLM tree pruning as research angle |
 | T0.10 | Test suite: 43 offline unit tests passing (no API key or solver binary needed for locals) |
@@ -322,7 +328,7 @@ All modes gracefully fallback to LLM-only if solver is unavailable.
 
 **Dataset:** 1,000 preflop scenarios from PokerBench with gold-standard strategies
 
-### Lookup Mode (GTO Nexus Preflop Tables)
+### Lookup Mode (TexasSolver bundled `qb_ranges` preflop tables)
 - **Matched scenarios:** 244 / 1,000 (24.4% coverage)
   - Limitation: PokerBench includes multi-way, all-in, SB limp conditions; our lookup is 6-max common spots only
 - **Accuracy on matched:** 88.5%
@@ -362,8 +368,8 @@ All modes gracefully fallback to LLM-only if solver is unavailable.
 | Limitation | Impact | Workaround | Timeline |
 |---|---|---|---|
 | **Windows-only solver binary** | Cannot deploy to Linux/Mac natively | TexasSolver Linux binary available (download + test) | Phase 2 (post-MVP) |
-| **2-player solver only** | Multi-way spots fall back to LLM synthesis | Pairwise HU decomposition + LLM reasoning (74.5% accurate) | Phase 3 (product) |
-| **Preflop LLM-only** | Preflop GTO less rigorous than postflop | GTO Nexus lookup tables + Gemini fallback (88.5% accurate) | Phase 1 (complete) |
+| **2-player solver only** | Multi-way spots fall back to LLM synthesis | Pairwise HU decomposition + LLM reasoning (74.5% action match on 424 PokerBench preflop spots; Gemini direct scored 77.4% on the same 424) | Phase 3 (product) |
+| **Preflop LLM-only** | Preflop GTO less rigorous than postflop | TexasSolver bundled `qb_ranges` lookup + Gemini fallback (88.5% action match on the 244 of 1,000 PokerBench preflop spots the lookup covers) | Phase 1 (complete) |
 | **1–6 minute solve time** | Not suitable for live play decisions | "Fast" mode available (~10s LLM-only); intended for study only | By design (study tool, not bot) |
 | **Call accuracy bottleneck** | Multi-way pairwise: call accuracy 2.4% | Improve LLM synthesis prompts + few-shot examples | Phase 4 (research) |
 | **No GPU solver support** | Cannot leverage GPU for CFR training | TexasSolver is CPU-optimized; parallelization via multi-core | Phase 5+ |
@@ -470,8 +476,8 @@ All modes gracefully fallback to LLM-only if solver is unavailable.
 
 ### Phase 3: Evaluation (COMPLETE ✓)
 - PokerBench integration
-- Preflop lookup tables (88.5% accuracy)
-- Multi-way decomposition (74.5% accuracy)
+- Preflop lookup tables (88.5% action match on 244 of 1,000 preflop spots, 24.4% coverage)
+- Multi-way decomposition (74.5% action match; below Gemini direct's 77.4% on the same 424 spots)
 - 425+ tests passing
 
 ### Phase 4: Deployment (COMPLETE ✓)

@@ -2,6 +2,31 @@
 
 All notable changes to NeuralGTO are documented here.
 
+## [Unreleased] — 2026-11-20
+
+### Documentation and license hygiene (no code behavior change)
+
+- **Removed `poker_gpt/preflop_charts/jonathan_little_gto.json` from the tree.** It was a
+  conversion of third-party commercial preflop charts (Jonathan Little) and should not have
+  been committed under MIT. No code loaded it: `preflop_lookup.py` reads TexasSolver's
+  bundled `qb_ranges` files, and `tests/test_preflop_charts.py` reads an untracked local copy
+  under `_dev/` and skips when that copy is absent. The file is still in git history from
+  commit 2089ee3 (v1.0.0) onward; history was not rewritten.
+- **Added `NOTICE` and a license notice in `vendor/README.md`:** the
+  `vendor/texassolver-neuralgto-opt.patch` file is a derivative of AGPL-3.0 TexasSolver and is
+  licensed AGPL-3.0, not MIT.
+- **Fixed the PokerBench citation.** The README linked arXiv:2401.06781, which is Huang et
+  al.'s PokerGPT paper. PokerBench is Zhuang et al., arXiv:2501.08328.
+- **Stated what the PokerBench numbers measure:** preflop only, action-category match; the
+  lookup's 88.5% covers 244 of 1,000 scenarios (24.4%).
+- **Added the multi-way baseline:** Gemini direct scored 77.4% on the same 424 multi-way
+  scenarios where the pairwise pipeline scored 74.5%.
+- **Corrected the preflop data source:** docs said "GTO Nexus data"; the code reads the
+  `qb_ranges` files bundled with the TexasSolver v0.2.0 release.
+- **Qualified the 2.27x solver speedup:** measured on local Windows; the hosted Oracle
+  backend ran a stock TexasSolver build.
+
+
 ## [1.1.0] — 2026-08-24
 
 ### Final Release — Project Archived
@@ -34,7 +59,7 @@ shipped after the 1.0.0 MVP. No further releases are planned.
 
 **Solver Performance Fork (~2.3x)**
 - Performance fork of TexasSolver's `console` branch; reproducible from `vendor/texassolver-neuralgto-opt.patch` + build scripts (fork not vendored — upstream is AGPL-3)
-- 67.5s → 29.8s at 8 threads on the benchmark flop spot (2.27x vs stock v0.2.0); 22.3s at 16 threads
+- 67.5s → 29.8s at 8 threads on the benchmark flop spot (2.27x vs stock v0.2.0); 22.3s at 16 threads. Measured on local Windows only: the hosted Oracle backend ran a stock build and never got this speedup
 - Output agrees with stock within 0.03% mean per-action frequency
 - Changes: cached strategy vectors, lock-free precomputed river ranges (SoA layout), raw-pointer CFR recursion, OpenMP scheduling fix, copy elimination, `-O3 -march=native` + LTO, mimalloc global allocator
 - Also fixed upstream's `system_clock` progress timing jumping on NTP resync
@@ -49,7 +74,7 @@ shipped after the 1.0.0 MVP. No further releases are planned.
 - Default mode eased to 50 iterations / 5% exploitable / 60s timeout for responsive web use
 
 **Research (paused, not shipped)**
-- T4.1 pairwise HU decomposition — complete, 74.5% on 424 multi-way PokerBench scenarios
+- T4.1 pairwise HU decomposition — complete, 74.5% on 424 multi-way PokerBench preflop scenarios; Gemini direct scored 77.4% on the same 424 (T4.3)
 - T4.3 method comparison eval — complete, results archived
 - T4.2 LLM-guided tree pruning — partial (2/5 spots, 3 known bugs); T4.2c never started
 - Paper (CoG / AAAI Demo target) — not written
@@ -72,7 +97,7 @@ shipped after the 1.0.0 MVP. No further releases are planned.
 **Core Pipeline**
 - Complete 5-step neuro-symbolic architecture: parse → solve → extract → advise
 - Postflop GTO solving via TexasSolver CFR engine (all board textures, all streets)
-- Preflop GTO lookup via pre-solved ranges (GTO Nexus data, 6-max common spots)
+- Preflop GTO lookup via pre-solved ranges (the `qb_ranges` files bundled with the TexasSolver v0.2.0 release, 6-max common spots; originally mislabeled "GTO Nexus data", corrected 2026-11-20)
 - Graceful fallback: solver unavailable → LLM-only mode (never crashes)
 - Three analysis modes: fast (LLM-only ~10s), default (2% ~1-2min), pro (0.3% ~4-6min)
 
@@ -90,7 +115,7 @@ shipped after the 1.0.0 MVP. No further releases are planned.
 **Multi-way Support**
 - Pairwise HU decomposition for 3+ player spots
 - LLM synthesis with multi-way theory (MDF compression, sandwich effect)
-- Evaluated on PokerBench: 74.5% accuracy on 424 multi-way preflop scenarios
+- Evaluated on PokerBench: 74.5% accuracy on 424 multi-way preflop scenarios (action-category match; Gemini direct later scored 77.4% on the same 424)
 
 **Study Tools**
 - Quiz mode with scoring engine (48 tests)
@@ -123,7 +148,7 @@ shipped after the 1.0.0 MVP. No further releases are planned.
 
 **Evaluation**
 - PokerBench framework integration
-- GTO Lookup: 88.5% accuracy on 244 HU preflop scenarios
+- GTO Lookup: 88.5% accuracy on 244 HU preflop scenarios (the 244 of 1,000 the lookup could match, 24.4% coverage)
 - Gemini Direct: 86.5% baseline
 - Pairwise LLM: 74.5% on 424 multi-way scenarios
 

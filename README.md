@@ -96,7 +96,7 @@ poke at the pipeline locally, but the React app is what was deployed.
 ### Core Pipeline
 - **5-step neuro-symbolic architecture**: parse → solve → extract → explain
 - **Postflop GTO solving** via TexasSolver CFR (all board textures, all streets)
-- **Preflop GTO lookup** via pre-solved ranges (6-max, common spots)
+- **Preflop GTO lookup** via the pre-solved 6-max 100bb range files that ship in the TexasSolver v0.2.0 release (`ranges/qb_ranges/`); common spots only
 - **Graceful fallback**: solver unavailable → LLM-only mode, always returns advice
 
 ### GTO Explanation Layer
@@ -119,7 +119,7 @@ poke at the pipeline locally, but the React app is what was deployed.
 ### Multi-way Hands
 - **Pairwise HU decomposition** — breaks 3+ player spots into heads-up pairs
 - **LLM synthesis** — combines pairwise results with multi-way theory (MDF compression, sandwich effect)
-- Evaluated on PokerBench: 74.5% accuracy on 424 multi-way preflop scenarios
+- Evaluated on PokerBench (preflop, action-category match): 74.5% on 424 multi-way scenarios. Asking Gemini directly, with no decomposition, scored 77.4% on the same 424, so the pairwise pipeline did not beat the plain-LLM baseline on this benchmark. See [Research](#research).
 
 ---
 
@@ -156,9 +156,12 @@ TexasSolver is optional — the system works without it (LLM-only mode).
 
 ### Optimized build (optional, ~2.3x faster)
 
-The production backend ran a performance fork of TexasSolver's `console` branch.
-The fork itself is not vendored here (upstream is AGPL-3; this repo is MIT), but
-everything needed to rebuild it is in [`vendor/`](vendor/README.md):
+A performance fork of TexasSolver's `console` branch, built and run on local
+Windows. **The hosted Oracle backend ran a stock TexasSolver build; the optimized
+fork was never deployed there.** The fork itself is not vendored here, but
+everything needed to rebuild it is in [`vendor/`](vendor/README.md). The patch
+file is a derivative of AGPL-3.0 TexasSolver and is licensed AGPL-3.0, not MIT
+(see [NOTICE](NOTICE)):
 
 | File | Purpose |
 |---|---|
@@ -166,11 +169,13 @@ everything needed to rebuild it is in [`vendor/`](vendor/README.md):
 | `vendor/build_solver.sh` | Windows build (MSYS2 UCRT64 g++) |
 | `vendor/build_solver_linux.sh` | Linux / Oracle Ampere ARM64 build |
 
-Measured on the benchmark flop spot: **67.5s → 29.8s at 8 threads** (2.27x vs the
-stock v0.2.0 binary), 22.3s at 16 threads, with per-action frequencies agreeing
-with stock to within 0.03% mean. The wins come from caching the strategy vector,
-a lock-free river-range cache, raw-pointer CFR recursion, OpenMP tuning, and
-mimalloc. See `vendor/README.md` for the full write-up.
+Measured locally on Windows on one benchmark flop spot: **67.5s → 29.8s at 8
+threads** (2.27x vs the stock v0.2.0 binary), 22.3s at 16 threads, with
+per-action frequencies agreeing with stock to within 0.03% mean. The hosted
+service ran the stock build, so it never got this speedup. The wins come from
+caching the strategy vector, a lock-free river-range cache, raw-pointer CFR
+recursion, OpenMP tuning, and mimalloc. See `vendor/README.md` for the full
+write-up.
 
 ---
 
@@ -190,7 +195,7 @@ poker_gpt/
 ├── nl_advisor.py            # Step 5: StrategyResult → NL advice (Gemini)
 ├── sanity_checker.py        # Step 4.5: LLM review of extreme frequencies
 │
-├── preflop_lookup.py        # Pre-solved GTO preflop charts
+├── preflop_lookup.py        # Preflop lookup over TexasSolver's bundled qb_ranges files
 ├── multiway.py              # Multi-way pairwise HU decomposition
 ├── range_utils.py           # Range math utilities + default GTO ranges
 ├── range_display.py         # 13×13 hand grid visualization (ASCII + Rich)
@@ -204,8 +209,7 @@ poker_gpt/
 │
 ├── prompts/                 # System prompts (advisor, parser, multiway)
 ├── evaluation/              # PokerBench eval framework
-├── preflop_charts/          # Pre-solved GTO data (JSON)
-├── tests/                   # 425+ offline tests (pytest)
+├── tests/                   # 444 passing offline tests (pytest)
 ├── _cache/                  # Cached solver outputs (auto-created)
 └── _work/                   # Runtime solver I/O (auto-created)
 
@@ -303,7 +307,7 @@ All via environment variables (`.env` file). See `.env.example` for the full tem
 
 - **Heads-up postflop only** — TexasSolver is a 2-player solver. Multi-way spots use pairwise decomposition + LLM synthesis.
 - **Solver binary is per-platform** — upstream ships a Windows `console_solver.exe`; the deployed Linux/ARM64 build was compiled from source (see `vendor/`).
-- **Preflop** — Solver handles postflop only. Preflop uses pre-solved lookup tables (GTO Nexus data) + Gemini fallback.
+- **Preflop** — Solver handles postflop only. Preflop uses the pre-solved range files bundled with the TexasSolver v0.2.0 release (`solver_bin/TexasSolver-v0.2.0-Windows/ranges/qb_ranges/100bb 2.5x 500rake/`, 1,108 files; see `poker_gpt/preflop_lookup.py`) + Gemini fallback. Earlier docs called this "GTO Nexus data"; nothing in the code reads GTO Nexus data. The lookup matches only 244 of PokerBench's 1,000 preflop spots (24.4%); it misses all-ins, small-blind limps, cold-calls and multi-caller pots.
 - **~30s-3 min per postflop spot** — not real-time. Designed for study, not live play.
 - **No exploitability measurement** — strategy quality is compared by L1 distance to a full-tree solve, not NashConv, so pruning claims are not falsifiable as-is.
 - **Combo weighting** — `range_utils` / `strategy_extractor` treat all 169 hand classes equally rather than weighting by 4/12/6 combos.
@@ -318,7 +322,7 @@ best-effort and expect them to lapse** now that the project is archived.
 | Component | Where | Status at sunset |
 |---|---|---|
 | Frontend | Cloudflare Pages — `neuralgto.pages.dev` | Live, builds from `neuralgto-web/` |
-| Backend (full solver) | Oracle Cloud Always Free, Ampere A1 ARM64 | Live at `:8000`, native TexasSolver build |
+| Backend (full solver) | Oracle Cloud Always Free, Ampere A1 ARM64 | Live at `:8000`, native stock TexasSolver build (not the optimized fork) |
 | Backend (LLM-only fallback) | Google Cloud Run | Live, instant, no solver |
 | HTTPS for backend | Cloudflare Worker proxy → Oracle VM | Live |
 | Database | Supabase free tier | Provisioned; pauses after 7 idle days |
@@ -336,21 +340,40 @@ Run cost was **$0/month**. Deployment runbooks: [`docs/DEPLOYMENT.md`](docs/DEPL
 
 ## Research
 
-NeuralGTO is also a research project exploring neuro-symbolic approaches to poker strategy. Evaluated on the [PokerBench](https://arxiv.org/abs/2401.06781) benchmark:
+NeuralGTO is also a research project exploring neuro-symbolic approaches to poker strategy. Evaluated on the [PokerBench](https://arxiv.org/abs/2501.08328) benchmark (Zhuang et al., 2025, arXiv:2501.08328):
 
 | Mode | Scenarios | Accuracy | 95% CI |
 |------|-----------|----------|--------|
 | GTO Lookup (HU) | 244 | 88.5% | ±4.0pp |
 | Gemini Direct (HU) | 244 | 86.5% | ±4.3pp |
 | Pairwise LLM (Multi-way) | 424 | 74.5% | ±4.1pp |
+| Gemini Direct (Multi-way) | 424 | 77.4% | ±4.0pp |
 
-Target venues: AAAI Demo Track, CoG, AAMAS.
+What these numbers measure:
+
+- **Preflop only.** Every run used PokerBench's 1,000-scenario preflop test set; no postflop scenario was scored.
+- **Action-category match.** A prediction counts as correct when its action category (fold, check, call, or raise, with bet and raise treated as the same) matches PokerBench's label. Bet sizes and mixed frequencies are not scored (`poker_gpt/evaluation/pokerbench.py`, `action_matches`).
+- **Lookup coverage is 24.4%.** The lookup's 88.5% is 216 correct out of the 244 of 1,000 scenarios it could match. The other 756 (316 all-ins, 266 small-blind limps, 91 cold-calls, 83 multi-caller spots) had no matching range file. Counting every scenario, the lookup alone answers 21.6% correctly.
+- **The HU gap is inside the noise.** Lookup beat Gemini direct by 2.0pp on the same 244, with overlapping 95% intervals.
+- **Pairwise lost on multi-way.** Gemini direct beat the pairwise decomposition by 2.9pp on the same 424.
+
+Source: `_dev/TASK_RESULTS/T4.3/summary.txt` (not tracked) and `_data/pokerbench/eval_*.json`.
+
+No paper was written; the project was archived before submission.
+
+> An earlier version of this README linked PokerBench to arXiv:2401.06781. That ID is
+> Huang et al.'s PokerGPT paper, a different work. Corrected 2026-11-20.
 
 ---
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE), except `vendor/texassolver-neuralgto-opt.patch`, which is a
+derivative of AGPL-3.0 TexasSolver and is licensed AGPL-3.0. See [NOTICE](NOTICE).
+
+TexasSolver itself, and the `qb_ranges` preflop files that ship with its
+release, are not part of this repository; download them from the upstream
+project under its own license.
 
 ---
 

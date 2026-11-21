@@ -1,8 +1,17 @@
 # vendor/ — optimized TexasSolver build
 
-The production solver is a fork of [bupticybee/TexasSolver](https://github.com/bupticybee/TexasSolver)
+The optimized local solver is a fork of [bupticybee/TexasSolver](https://github.com/bupticybee/TexasSolver)
 (`console` branch — the Qt-free lineage the release `console_solver` binaries
 come from), with performance work on the local branch **`neuralgto-opt`**.
+
+> **License notice.** `texassolver-neuralgto-opt.patch` is a diff of modified
+> TexasSolver source. TexasSolver is licensed AGPL-3.0, so this patch is a
+> derivative of an AGPL-3.0 work and is licensed **AGPL-3.0, not MIT**. The
+> repository's MIT `LICENSE` does not cover it. Any solver binary built from it
+> is also AGPL-3.0, and running such a build as a network service brings in
+> AGPL-3.0 section 13. The build scripts and `mimalloc_newdelete.cpp` are
+> original to this project and are MIT. See [`../NOTICE`](../NOTICE). This is a
+> factual license label, not legal advice.
 
 `TexasSolver/` and `mimalloc/` are plain git clones and are **not** committed to
 this repo (TexasSolver is AGPL-3; keep the fork out of the MIT-licensed tree).
@@ -74,7 +83,10 @@ spots validated separately.
 ## Deployment
 
 - **Local Windows:** `solver_bin/TexasSolver-opt-Windows/console_solver.exe`
-  (already built; `.env` points at it).
-- **Oracle backend:** rebuild on the box with `build_solver_linux.sh` and point
-  the service's `SOLVER_BINARY_PATH` at the new binary. The resources folder is
-  unchanged and can be shared with the stock install.
+  (already built; `.env` points at it). This is the only place the optimized
+  build ran, and the only place the benchmark above was measured.
+- **Oracle backend:** the hosted service ran a **stock** TexasSolver build. The
+  steps to rebuild it there (run `build_solver_linux.sh` on the box and point the
+  service's `SOLVER_BINARY_PATH` at the new binary; the resources folder is
+  unchanged and can be shared with the stock install) were never carried out, so
+  the deployed service never got the speedup.

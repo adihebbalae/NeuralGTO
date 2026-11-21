@@ -1,0 +1,39 @@
+NeuralGTO
+=========
+
+This repository is licensed under the MIT License (see LICENSE), with one
+exception.
+
+Exception: vendor/texassolver-neuralgto-opt.patch
+-------------------------------------------------
+This file is a diff against TexasSolver (https://github.com/bupticybee/TexasSolver),
+which is licensed under the GNU Affero General Public License, version 3
+(AGPL-3.0). The patch contains modified TexasSolver source code, so it is a
+derivative of an AGPL-3.0 work and is licensed under AGPL-3.0, not MIT. The
+MIT License in LICENSE does not apply to it.
+
+The full AGPL-3.0 text is at https://www.gnu.org/licenses/agpl-3.0.txt and in
+the upstream TexasSolver repository's LICENSE file.
+
+Modified versions of TexasSolver built from this patch remain subject to
+AGPL-3.0, including section 13 (remote network interaction): if you run a
+modified build as a network service, AGPL-3.0 section 13 applies to that build.
+
+The build scripts in vendor/ (build_solver.sh, build_solver_linux.sh) and
+vendor/mimalloc_newdelete.cpp are original to this project and are MIT.
+
+Not included
+------------
+TexasSolver itself, its release binaries, and the preflop range files that
+ship in its release (ranges/qb_ranges/) are not distributed in this
+repository. poker_gpt/preflop_lookup.py reads those range files from a local
+download of the TexasSolver v0.2.0 release placed in solver_bin/.
+
+Third-party preflop chart data
+------------------------------
+An earlier commit (2089ee3, tag v1.0.0) added
+poker_gpt/preflop_charts/jonathan_little_gto.json, a conversion of third-party
+commercial preflop charts. It was removed from the tree on 2026-11-20. No code
+in this repository loads it. It remains in git history before that date.
+
+This notice labels licenses as a factual matter. It is not legal advice.

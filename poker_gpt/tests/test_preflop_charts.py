@@ -10,6 +10,11 @@ DOCUMENTATION:
     These are OFFLINE tests — no API keys, no solver binary required.
     Run: python -m pytest poker_gpt/tests/test_preflop_charts.py -v
     The JSON must exist before running (produced by _work/build_preflop_json.py).
+
+LICENSING NOTE (2026-11-20):
+    The chart data is third-party commercial content and is not distributed in
+    this repository. The tests read an untracked local copy and skip cleanly
+    (via the charts_data fixture) when it is absent. No runtime code loads it.
 """
 
 import json

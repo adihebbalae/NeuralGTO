@@ -56,3 +56,6 @@ desktop.ini
 vendor/TexasSolver/
 vendor/mimalloc/
 vendor/*.o
+
+# Third-party commercial chart data: never commit (removed 2026-11-20, see NOTICE)
+poker_gpt/preflop_charts/jonathan_little_gto.json
